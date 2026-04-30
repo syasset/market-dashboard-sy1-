@@ -4,17 +4,20 @@ import pandas as pd
 import plotly.graph_objects as go
 import feedparser
 import urllib.parse
-from streamlit_autorefresh import st_autorefresh
-
-# =========================
-# 🔄 자동 새로고침 (5분)
-# =========================
-st_autorefresh(interval=300000, key="auto_refresh")  # 300,000ms = 5분
+from datetime import datetime
 
 st.set_page_config(layout="wide")
 
 # =========================
-# 📌 종목 정의
+# ⏱ 업데이트 시간
+# =========================
+st.markdown(
+    f"<div style='text-align:right'>⏱ Last Update: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</div>",
+    unsafe_allow_html=True
+)
+
+# =========================
+# 📌 자산 정의
 # =========================
 tickers = {
     "Bitcoin": "BTC-USD",
@@ -22,206 +25,193 @@ tickers = {
     "KOSDAQ": "^KQ11",
     "NASDAQ": "^IXIC",
     "S&P500": "^GSPC",
-    "Gold": "GC=F",
-    "Oil": "CL=F",
-    "Natural Gas": "NG=F"
+    "Gold": "GC=F"
 }
 
+usd_assets = ["Bitcoin", "NASDAQ", "S&P500", "Gold"]
+
 # =========================
-# 📊 데이터 로딩 (5분 캐시)
+# 📊 데이터 로드
 # =========================
 @st.cache_data(ttl=300)
-def fetch_data():
-    raw = yf.download(list(tickers.values()), period="1y", progress=False)["Close"]
-    raw.columns = list(tickers.keys())
-    raw = raw.dropna(how="all")
-    return raw
+def load_data():
+    df = yf.download(list(tickers.values()), start="2010-01-01", progress=False)["Close"]
+    if isinstance(df.columns, pd.MultiIndex):
+        df.columns = df.columns.get_level_values(1)
+    df.columns = list(tickers.keys())
+    return df.ffill().bfill()
 
-data_raw = fetch_data()
+@st.cache_data(ttl=300)
+def load_fx():
+    fx = yf.download("KRW=X", start="2010-01-01", progress=False)["Close"]
+    return fx.squeeze().ffill().bfill()
+
+data = load_data()
+fx = load_fx()
 
 # =========================
-# 📊 INDEX CHART
+# 💱 KRW 환산
 # =========================
-data_indexed = data_raw / data_raw.iloc[0] * 100
+fx_align = fx.reindex(data.index).ffill().bfill()
+data_krw = data.copy()
 
+for col in usd_assets:
+    data_krw[col] = data[col].values * fx_align.values
+
+# =========================
+# 📊 성장률
+# =========================
+growth = pd.DataFrame(index=data.index)
+
+for col in data.columns:
+    first = data[col].first_valid_index()
+    if first is not None:
+        growth[col] = (data[col] / data.loc[first, col] - 1) * 100
+
+# =========================
+# 📊 자산 차트
+# =========================
 fig = go.Figure()
 
-for col in data_indexed.columns:
+for col in growth.columns:
     fig.add_trace(go.Scatter(
-        x=data_indexed.index,
-        y=data_indexed[col],
-        mode="lines",
+        x=growth.index,
+        y=growth[col],
+        customdata=data_krw[col],
         name=col,
-        hovertemplate="📅 %{x|%Y-%m-%d}<br>%{fullData.name}: %{y:.2f}<extra></extra>"
+        hovertemplate="📅 %{x|%Y-%m-%d}<br>%{fullData.name}<br>📈 %{y:.2f}%<br>💰 %{customdata:,.0f}<extra></extra>"
     ))
 
-fig.update_layout(
-    title="📊 Multi-Asset Dashboard (Indexed Comparison)",
-    height=600,
-    template="plotly_dark",
-    hovermode="closest",
-    dragmode="pan"
-)
-
+fig.update_layout(template="plotly_dark", dragmode="pan", height=600)
 st.plotly_chart(fig, use_container_width=True, config={"scrollZoom": True})
+
+# =========================
+# 🌍 매크로 차트
+# =========================
+macro_tickers = {
+    "US10Y": "^TNX",
+    "US2Y": "^IRX",
+    "DXY": "DX-Y.NYB",
+    "USDKRW": "KRW=X"
+}
+
+@st.cache_data(ttl=300)
+def load_macro():
+    df = yf.download(list(macro_tickers.values()), start="2010-01-01", progress=False)["Close"]
+    if isinstance(df.columns, pd.MultiIndex):
+        df = df.droplevel(0, axis=1)
+    df.columns = list(macro_tickers.keys())
+    return df.ffill().bfill()
+
+macro = load_macro()
+macro_growth = (macro / macro.iloc[0] - 1) * 100
+
+fig2 = go.Figure()
+
+for col in macro_growth.columns:
+    fig2.add_trace(go.Scatter(
+        x=macro_growth.index,
+        y=macro_growth[col],
+        customdata=macro[col],
+        name=col,
+        hovertemplate="📅 %{x|%Y-%m-%d}<br>%{fullData.name}<br>📈 %{y:.2f}%<br>💰 %{customdata:.2f}<extra></extra>"
+    ))
+
+fig2.update_layout(template="plotly_dark", dragmode="pan", height=500)
+st.plotly_chart(fig2, use_container_width=True, config={"scrollZoom": True})
 
 # =========================
 # 📅 날짜 선택
 # =========================
-selected_date = st.select_slider(
-    "📅 분석 날짜 선택 (차트와 독립)",
-    options=data_raw.index,
-    value=data_raw.index[-1]
-)
-
-row = data_raw.loc[selected_date]
-row_index = data_indexed.loc[selected_date]
-returns_on_day = data_raw.pct_change().loc[selected_date]
+date = st.select_slider("📅 날짜 선택", options=data.index, value=data.index[-1])
 
 # =========================
-# 💱 환율 기준
+# 📊 Selected Date 분석
 # =========================
-USD_TO_KRW = 1350
+st.markdown("## 📊 Selected Date Analysis")
 
-def to_krw(asset, value):
-    if asset in ["KOSPI", "KOSDAQ"]:
-        return value
-    return value * USD_TO_KRW
+row_usd = data.loc[date]
+row_krw = data_krw.loc[date]
+row_growth = growth.loc[date]
 
-# =========================
-# 📌 Selected Date
-# =========================
-st.markdown("---")
-st.markdown(f"## 📌 Selected Date: {selected_date.date()}")
-
-st.markdown("### 💱 Currency Guide")
-st.markdown("""
-- 🇺🇸 USD: Bitcoin, NASDAQ, S&P500, Gold, Oil, Natural Gas  
-- 🇰🇷 KRW: KOSPI, KOSDAQ  
-""")
-
-table = pd.DataFrame({
-    "Asset": row.index,
-    "Index (Base=100)": row_index.values,
-    "USD Price": row.values,
+df_view = pd.DataFrame({
+    "성장률 (%)": row_growth,
+    "USD 값": row_usd,
+    "KRW 값": row_krw
 })
 
-table["KRW Price"] = [
-    to_krw(a, v) for a, v in zip(row.index, row.values)
-]
-
-table["Index (Base=100)"] = table["Index (Base=100)"].apply(lambda x: f"{x:.2f}")
-table["USD Price"] = table["USD Price"].apply(lambda x: f"{x:,.2f}")
-table["KRW Price"] = table["KRW Price"].apply(lambda x: f"{x:,.0f}")
-
-st.dataframe(table, use_container_width=True)
+st.dataframe(df_view.style.format({
+    "성장률 (%)": "{:.2f}",
+    "USD 값": "{:,.2f}",
+    "KRW 값": "{:,.0f}"
+}))
 
 # =========================
-# 🧠 AI 시장 상태 분석
+# 🧠 AI 시장 심리
 # =========================
-st.markdown("---")
-st.markdown("## 🤖 AI 시장 상태 분석")
+returns = data.pct_change().loc[date]
 
-btc = returns_on_day.get("Bitcoin", 0)
-nasdaq = returns_on_day.get("NASDAQ", 0)
-kospi = returns_on_day.get("KOSPI", 0)
-kosdaq = returns_on_day.get("KOSDAQ", 0)
-gold = returns_on_day.get("Gold", 0)
-
-market_score = (
-    nasdaq * 0.4 +
-    kospi * 0.25 +
-    kosdaq * 0.15 +
-    btc * 0.2 -
-    gold * 0.2
+score = (
+    returns.get("NASDAQ",0)*0.4 +
+    returns.get("KOSPI",0)*0.25 +
+    returns.get("KOSDAQ",0)*0.15 +
+    returns.get("Bitcoin",0)*0.2 -
+    returns.get("Gold",0)*0.2
 )
 
-if market_score > 0.01:
-    market_state = "🔥 강한 상승장 (Risk-On)"
-    interpretation = "위험자산으로 자금 유입"
-elif market_score > 0:
-    market_state = "📈 완만한 상승장"
-    interpretation = "완만한 상승 흐름"
-elif market_score < -0.01:
-    market_state = "⚠️ 하락장 (Risk-Off)"
-    interpretation = "안전자산 선호"
+if score > 0.01:
+    state = "🔥 Risk-On"
+    comment = "성장주 및 위험자산 선호 흐름"
+elif score < -0.01:
+    state = "⚠️ Risk-Off"
+    comment = "안전자산 중심 방어적 흐름"
 else:
-    market_state = "⚖️ 혼조장 (Neutral)"
-    interpretation = "방향성 부족"
+    state = "⚖️ Neutral"
+    comment = "방향성 없는 혼조 흐름"
 
-st.markdown(f"""
-### 📊 시장 진단
-- 상태: **{market_state}**
-- 해석: {interpretation}
-
-### 📌 자산 변화
-- NASDAQ: {nasdaq*100:.2f}%
-- KOSPI: {kospi*100:.2f}%
-- KOSDAQ: {kosdaq*100:.2f}%
-- Bitcoin: {btc*100:.2f}%
-- Gold: {gold*100:.2f}%
-
-👉 시장 점수: **{market_score:.4f}**
-""")
+st.markdown(f"## 🧠 Market Sentiment\n- 상태: {state}\n- Score: {score:.4f}\n👉 {comment}")
 
 # =========================
-# 🤖 AI 투자 추천
+# 🤖 테마 (AI 심리 바로 아래)
 # =========================
-st.markdown("---")
-st.markdown("## 🤖 AI 투자 추천")
+theme_pool = [
+"AI","반도체","로봇","클라우드","소프트웨어","데이터센터",
+"자동차","전기차","자율주행","2차전지","건설","조선","철강","화학",
+"에너지","정유","LNG","태양광","풍력","수소","원자력",
+"비트코인","블록체인","핀테크",
+"금","채권","리츠","유틸리티",
+"헬스케어","제약","바이오",
+"방산","우주항공","드론",
+"항공","여행","카지노","엔터","미디어",
+"식품","유통","플랫폼","게임","교육","물류","스마트팜"
+]
 
-if market_score > 0.01:
-    recommended = [
-        "AI 반도체", "NASDAQ 성장주", "2차전지", "클라우드",
-        "비트코인", "로봇", "신재생에너지", "모멘텀 ETF",
-        "미국 성장주", "헬스케어"
-    ]
-    risky = ["채권", "금", "배당주", "유틸리티", "저변동 ETF"]
+def theme_score(t):
+    base = returns.mean()
+    if t in ["AI","반도체","클라우드"]:
+        base += returns.get("NASDAQ",0)
+    if t in ["자동차","전기차"]:
+        base += returns.get("S&P500",0)
+    if t in ["비트코인"]:
+        base += returns.get("Bitcoin",0)
+    if t in ["금","채권"]:
+        base += returns.get("Gold",0)
+    return base
 
-elif market_score < -0.01:
-    recommended = [
-        "금", "미국 국채", "달러", "배당주", "필수소비재",
-        "헬스케어", "현금", "에너지", "방어주", "방어 ETF"
-    ]
-    risky = [
-        "AI 과열", "코인 레버리지", "중소형 바이오",
-        "2차전지 과열", "성장주"
-    ]
+scores = pd.Series({t:theme_score(t) for t in theme_pool})
 
-else:
-    recommended = [
-        "ETF 분산", "인덱스 투자", "배당 성장", "금+주식",
-        "글로벌 ETF", "에너지", "현금", "헷지", "저변동 ETF",
-        "균형 포트폴리오"
-    ]
-    risky = [
-        "레버리지", "단일 테마", "코인", "투기주", "고PER 성장주"
-    ]
+top = scores.sort_values(ascending=False).head(10)
+bottom = scores.sort_values().head(10)
 
-st.markdown("### 📈 추천 TOP 10")
-for i, r in enumerate(recommended, 1):
-    st.write(f"{i}. {r}")
+st.markdown("## 🤖 AI Theme Recommendation")
 
-st.markdown("---")
+st.markdown("### ✅ 투자 권장 테마")
+for i,t in enumerate(top.index,1):
+    st.markdown(f"{i}. {t} → 시장 데이터 기반 상승 흐름 ({scores[t]:.2%})")
 
-st.markdown("### ⚠️ 리스크 TOP 10")
-for i, r in enumerate(risky, 1):
-    st.write(f"{i}. {r}")
-
-# =========================
-# 📊 변동성
-# =========================
-returns = data_raw.pct_change().dropna()
-volatility = returns.std() * (252 ** 0.5)
-
-vol_df = pd.DataFrame({
-    "Asset": volatility.index,
-    "Volatility": volatility.values
-}).sort_values("Volatility", ascending=False)
-
-st.markdown("---")
-st.markdown("## 📊 Volatility Ranking")
-st.dataframe(vol_df.reset_index(drop=True), use_container_width=True)
+st.markdown("### ⚠️ 투자 유의 테마")
+for i,t in enumerate(bottom.index,1):
+    st.markdown(f"{i}. {t} → 시장 데이터 기반 약세 흐름 ({scores[t]:.2%})")
 
 # =========================
 # 📰 뉴스
@@ -241,7 +231,9 @@ keywords = [
     "유가",
     "AI 반도체",
     "비트코인",
-    "중동"
+    "중동",
+    "트럼프",
+    "원유"
 ]
 
 for k in keywords:
