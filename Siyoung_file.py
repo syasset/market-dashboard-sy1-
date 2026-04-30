@@ -198,20 +198,28 @@ def theme_score(t):
         base += returns.get("Gold",0)
     return base
 
-scores = pd.Series({t:theme_score(t) for t in theme_pool})
+scores = pd.Series({t: theme_score(t) for t in theme_pool})
 
 top = scores.sort_values(ascending=False).head(10)
-bottom = scores.sort_values().head(10)
+bottom = scores.sort_values(ascending=True).head(10)
+
+# =========================
+# 📊 테이블 구성
+# =========================
+df = pd.DataFrame({
+    "투자 권고": top.index.values,
+    "권고 수익률": top.values,
+    "투자 유의": bottom.index.values,
+    "유의 수익률": bottom.values
+})
+
+# 보기 좋게 퍼센트 변환
+df["권고 수익률"] = df["권고 수익률"].map(lambda x: f"{x:.2%}")
+df["유의 수익률"] = df["유의 수익률"].map(lambda x: f"{x:.2%}")
 
 st.markdown("## 🤖 AI Theme Recommendation")
 
-st.markdown("### ✅ 투자 권장 테마")
-for i,t in enumerate(top.index,1):
-    st.markdown(f"{i}. {t} → 시장 데이터 기반 상승 흐름 ({scores[t]:.2%})")
-
-st.markdown("### ⚠️ 투자 유의 테마")
-for i,t in enumerate(bottom.index,1):
-    st.markdown(f"{i}. {t} → 시장 데이터 기반 약세 흐름 ({scores[t]:.2%})")
+st.dataframe(df, use_container_width=True)
 
 # =========================
 # 📰 뉴스
