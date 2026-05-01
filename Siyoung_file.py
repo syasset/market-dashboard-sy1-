@@ -35,7 +35,7 @@ usd_assets = ["Bitcoin", "NASDAQ", "S&P500", "Gold"]
 # =========================
 @st.cache_data(ttl=300)
 def load_data():
-    df = yf.download(list(tickers.values()), start="2010-01-01", progress=False)["Close"]
+    df = yf.download(list(tickers.values()), start="2018-01-01", progress=False)["Close"]
     if isinstance(df.columns, pd.MultiIndex):
         df.columns = df.columns.get_level_values(1)
     df.columns = list(tickers.keys())
@@ -43,7 +43,7 @@ def load_data():
 
 @st.cache_data(ttl=300)
 def load_fx():
-    fx = yf.download("KRW=X", start="2010-01-01", progress=False)["Close"]
+    fx = yf.download("KRW=X", start="2018-01-01", progress=False)["Close"]
     return fx.squeeze().ffill().bfill()
 
 data = load_data()
@@ -97,7 +97,7 @@ macro_tickers = {
 
 @st.cache_data(ttl=300)
 def load_macro():
-    df = yf.download(list(macro_tickers.values()), start="2010-01-01", progress=False)["Close"]
+    df = yf.download(list(macro_tickers.values()), start="2018-01-01", progress=False)["Close"]
     if isinstance(df.columns, pd.MultiIndex):
         df = df.droplevel(0, axis=1)
     df.columns = list(macro_tickers.keys())
@@ -123,7 +123,82 @@ st.plotly_chart(fig2, use_container_width=True, config={"scrollZoom": True})
 # =========================
 # 📅 날짜 선택
 # =========================
-date = st.select_slider("📅 날짜 선택", options=data.index, value=data.index[-1])
+# =========================
+# 📅 데이터 준비
+# =========================
+data.index = pd.to_datetime(data.index)
+dates = data.index
+
+# =========================
+# 📅 단일 state
+# =========================
+if "selected_date" not in st.session_state:
+    st.session_state.selected_date = dates[-1]
+
+current = pd.to_datetime(st.session_state.selected_date)
+
+st.markdown("## 📅 Date Controller (State Sync Only)")
+
+# =========================
+# 1️⃣ slider (state 반영 + state 업데이트)
+# =========================
+# slider
+slider_value = st.select_slider(
+    "📊 Timeline",
+    options=list(dates),
+    value=st.session_state.selected_date
+)
+
+# 🔥 반드시 state에 반영
+if slider_value != st.session_state.selected_date:
+    st.session_state.selected_date = slider_value
+    st.rerun()
+
+# =========================
+# 2️⃣ dropdown (state만 업데이트)
+# =========================
+years = sorted(dates.year.unique())
+months = list(range(1, 13))
+days = list(range(1, 32))
+hours = list(range(0, 24))
+
+col1, col2, col3, col4 = st.columns(4)
+
+with col1:
+    year = st.selectbox("Year", years, index=years.index(current.year))
+
+with col2:
+    month = st.selectbox("Month", months, index=current.month - 1)
+
+with col3:
+    day = st.selectbox("Day", days, index=current.day - 1)
+
+with col4:
+    hour = st.selectbox("Hour", hours, index=current.hour)
+
+dt = pd.to_datetime(f"{year}-{month:02d}-{day:02d} {hour:02d}:00:00")
+idx = dates.get_indexer([dt], method="nearest")[0]
+dropdown_value = dates[idx]
+
+# =========================
+# 🔄 핵심: state만 업데이트
+# =========================
+new_date = st.session_state.selected_date
+
+if slider_value != new_date:
+    new_date = slider_value
+
+if dropdown_value != new_date:
+    new_date = dropdown_value
+
+if new_date != st.session_state.selected_date:
+    st.session_state.selected_date = new_date
+    st.rerun()
+
+# =========================
+# 📌 단일 데이터 기준값
+# =========================
+date = st.session_state.selected_date
 
 # =========================
 # 📊 Selected Date 분석
