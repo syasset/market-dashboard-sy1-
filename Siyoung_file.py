@@ -232,271 +232,497 @@ if not macro_growth.empty:
     st.plotly_chart(fig2, use_container_width=True, config={"scrollZoom": True})
 
 # =========================
-# 📅 날짜 선택 (개선된 버전)
+# 📅 기간별 섹터 분석 선택
 # =========================
-data.index = pd.to_datetime(data.index)
-dates = data.index
+    import streamlit as st
+    import yfinance as yf
+    import pandas as pd
+    from plotly.subplots import make_subplots
+    import plotly.graph_objects as go
 
-# 단일 state 초기화
-if "selected_date" not in st.session_state:
-    st.session_state.selected_date = dates[-1]
+    st.markdown("## 📅📈 기간별 섹터 분석")
 
-current = pd.to_datetime(st.session_state.selected_date)
+    period = st.selectbox(
+        "기간설정",
+        ["7일", "1개월", "6개월", "1년"]
+    )
 
-st.markdown("## 📅 Date Controller")
+    period_map = {
+        "7일": 7,
+        "1개월": 30,
+        "6개월": 180,
+        "1년": 365
+    }
 
-# 1️⃣ Slider
-slider_value = st.select_slider(
-    "📊 Timeline",
-    options=list(dates),
-    value=st.session_state.selected_date
-)
+    days = period_map[period]
 
-# 2️⃣ Dropdown
-years = sorted(dates.year.unique())
-months = list(range(1, 13))
-days = list(range(1, 32))
-hours = list(range(0, 24))
+    period_days_map = {
+        7: "1mo",
+        30: "3mo",
+        180: "1y",
+        365: "2y"
+    }
 
-col1, col2, col3, col4 = st.columns(4)
+    yf_period = period_days_map[days]
 
-with col1:
-    year = st.selectbox("Year", years, index=years.index(current.year))
+    # 📊 섹터 정의
+    sector_map = {
+        "반도체": ["005930.KS", "000660.KS"],
+        "자동차": ["005380.KS", "000270.KS"],
+        "방산": ["012450.KS", "272210.KS"],
+        "소프트웨어": ["035420.KS", "035720.KS"],
+        "우주항공": ["047810.KS", "079550.KS"],
+        "휴머노이드 로봇": ["068270.KS"],
+        "식료품": ["097950.KS", "271560.KS"],
+        "건설": ["000720.KS", "028050.KS"]
+    }
 
-with col2:
-    month = st.selectbox("Month", months, index=current.month - 1)
+    # 📥 섹터 데이터 다운로드 (data랑 완전 분리)
+    stock_list = list(set([s for stocks in sector_map.values() for s in stocks]))
 
-with col3:
-    day = st.selectbox("Day", days, index=current.day - 1)
+    raw = yf.download(stock_list, period=yf_period, progress=False)["Close"]
 
-with col4:
-    hour = st.selectbox("Hour", hours, index=current.hour)
+    if isinstance(raw.columns, pd.MultiIndex):
+        raw.columns = raw.columns.get_level_values(1)
 
-# 드롭다운에서 선택한 날짜를 가장 가까운 실제 데이터 날짜로 변환
-try:
-    dt = pd.to_datetime(f"{year}-{month:02d}-{day:02d} {hour:02d}:00:00")
-    idx = dates.get_indexer([dt], method="nearest")[0]
-    dropdown_value = dates[idx]
-except (ValueError, IndexError):
-    dropdown_value = st.session_state.selected_date
+    data_sector = raw.ffill().bfill()  # ✅ 별도 변수
 
-# 🔄 State 업데이트 (충돌 해결)
-changed = False
-new_date = st.session_state.selected_date
 
-# 슬라이더 우선
-if slider_value != st.session_state.selected_date:
-    new_date = slider_value
-    changed = True
-# 드롭다운 2순위
-elif dropdown_value != st.session_state.selected_date:
-    new_date = dropdown_value
-    changed = True
+    # 📈 섹터 지수 생성
+    def build_sector_index(sector_map, data_sector):
+        sector_df = pd.DataFrame(index=data_sector.index)
 
-if changed:
-    st.session_state.selected_date = new_date
-    st.rerun()
+        for sector, stocks in sector_map.items():
+            valid = [s for s in stocks if s in data_sector.columns]
 
-# =========================
-# 📌 안전한 날짜 접근
-# =========================
-selected_date = st.session_state.selected_date
-date_idx = data.index.get_indexer([selected_date], method="nearest")[0]
-actual_date = data.index[date_idx]
+            if valid:
+                sector_df[sector] = data_sector[valid].mean(axis=1)
 
-# =========================
-# 📊 Selected Date 분석
-# =========================
-st.markdown("## 📊 Selected Date Analysis")
-st.markdown(f"**선택된 날짜**: {actual_date.strftime('%Y-%m-%d %H:%M')}")
+        return sector_df
 
-row_usd = data.iloc[date_idx]
-row_krw = data_krw.iloc[date_idx]
-row_growth = growth.iloc[date_idx]
 
-df_view = pd.DataFrame({
-    "성장률 (%)": row_growth,
-    "USD 값": row_usd,
-    "KRW 값": row_krw
-})
+    sector_df = build_sector_index(sector_map, data_sector)
 
-st.dataframe(df_view.style.format({
-    "성장률 (%)": "{:.2f}",
-    "USD 값": "{:,.2f}",
-    "KRW 값": "{:,.0f}"
-}))
+    # 📊 수익률 지수화 (섹터 전용)
+    growth_sector = sector_df / sector_df.iloc[0] * 100  # ✅ 이름 분리
 
-# =========================
-# 🧠 AI 시장 심리 (개선된 버전)
-# =========================
-returns = data.pct_change().iloc[date_idx].fillna(0)
+    # 📊 섹터 차트
+    fig = make_subplots(
+        rows=4, cols=2,
+        subplot_titles=list(growth_sector.columns)
+    )
 
-score = (
-        returns.get("NASDAQ", 0) * 0.4 +
-        returns.get("KOSPI", 0) * 0.25 +
-        returns.get("KOSDAQ", 0) * 0.15 +
-        returns.get("Bitcoin", 0) * 0.2 -
-        returns.get("Gold", 0) * 0.2
-)
+    row, col = 1, 1
 
-if score > 0.01:
-    state = "🔥 Risk-On"
-    comment = "성장주 및 위험자산 선호 흐름"
-elif score < -0.01:
-    state = "⚠️ Risk-Off"
-    comment = "안전자산 중심 방어적 흐름"
+    for sector in growth_sector.columns:
+        fig.add_trace(
+            go.Scatter(
+                x=growth_sector.index,
+                y=growth_sector[sector],
+                mode="lines"
+            ),
+            row=row,
+            col=col
+        )
+
+        col += 1
+        if col > 2:
+            col = 1
+            row += 1
+
+    fig.update_layout(
+        height=900,
+        showlegend=False,
+        title="📊 섹터별 기간 수익률 (지수화)"
+    )
+
+    st.plotly_chart(fig, use_container_width=True)
+
+    import pandas as pd
+    import numpy as np
+    import streamlit as st
+    import feedparser  # pip install feedparser 필요
+
+    # =========================
+    # 🛠 0. 뉴스 가져오기 함수 (링크 포함)
+    # =========================
+    @st.cache_data(ttl=3600)
+    def get_news(keyword, limit=2):
+        rss_url = f"https://news.google.com/rss/search?q={keyword}&hl=ko&gl=KR&ceid=KR:ko"
+        feed = feedparser.parse(rss_url)
+        news_results = []
+        for entry in feed.entries[:limit]:
+            news_results.append({
+                "title": entry.title,
+                "link": entry.link
+            })
+        return news_results
+
+    # =========================
+    # 📅 1. 날짜 제어 및 인덱싱 (최적화)
+    # =========================
+    data.index = pd.to_datetime(data.index)
+    dates = data.index
+
+    if "selected_date" not in st.session_state:
+        st.session_state.selected_date = dates[-1]
+
+    st.markdown("## 📅 Date Controller")
+
+    # Timeline Slider & Dropdowns (레이아웃 통합)
+    slider_value = st.select_slider("📊 Timeline", options=list(dates), value=st.session_state.selected_date,
+                                    key="slider_v2")
+
+    current = pd.to_datetime(st.session_state.selected_date)
+    col1, col2, col3, col4 = st.columns(4)
+    with col1:
+        year = st.selectbox("Year", sorted(dates.year.unique()), index=sorted(dates.year.unique()).index(current.year))
+    with col2:
+        month = st.selectbox("Month", range(1, 13), index=current.month - 1)
+    with col3:
+        day = st.selectbox("Day", range(1, 32), index=min(current.day - 1, 30))
+    with col4:
+        hour = st.selectbox("Hour", range(0, 24), index=current.hour)
+
+    # 날짜 확정 로직
+    try:
+        dt_input = pd.to_datetime(f"{year}-{month:02d}-{day:02d} {hour:02d}:00:00")
+        dropdown_val = dates[dates.get_indexer([dt_input], method="nearest")[0]]
+    except:
+        dropdown_val = slider_value
+
+    final_date = slider_value if slider_value != st.session_state.selected_date else dropdown_val
+
+    if final_date != st.session_state.selected_date:
+        st.session_state.selected_date = final_date
+        st.rerun()
+
+    # 기준 인덱스 고정 (이후 모든 계산에서 재사용)
+    date_idx = dates.get_indexer([st.session_state.selected_date], method="nearest")[0]
+    actual_date = dates[date_idx]
+
+    # =========================
+    # 📊 2. Selected Date Analysis (요청하신 수치 표)
+    # =========================
+    st.markdown("---")
+    st.markdown(f"### 📊 Selected Date Analysis ({actual_date.strftime('%Y-%m-%d %H:%M')})")
+
+    # 데이터 슬라이싱 최소화 (한 번에 추출)
+    df_view = pd.DataFrame({
+        "성장률 (%)": growth.iloc[date_idx],
+        "USD 값": data.iloc[date_idx],
+        "KRW 값": data_krw.iloc[date_idx]
+    })
+
+    st.dataframe(df_view.style.format({
+        "성장률 (%)": "{:.2f}",
+        "USD 값": "{:,.2f}",
+        "KRW 값": "{:,.0f}"
+    }), use_container_width=True)
+
+
+    # =========================
+    # 🧠 3. AI 분석 엔진 (속도 최적화)
+    # =========================
+    def analyze_trend_fast(ticker_name, df, target_idx):
+        # 분석에 필요한 최소한의 윈도우만 가져옴 (최대 120일)
+        start_pos = max(0, target_idx - 120)
+        window_data = df[ticker_name].iloc[start_pos: target_idx + 1]
+
+        if len(window_data) < 120:
+            return {"상태": "⚪ 데이터 부족", "점수": 50, "모멘텀(3M)": "0.00%"}
+
+        curr = window_data.iloc[-1]
+        m20, m60, m120 = window_data.iloc[-20:].mean(), window_data.iloc[-60:].mean(), window_data.mean()
+
+        if m20 > m60 > m120:
+            status, score = "🔥 강력 상승 (정배열)", 100
+        elif curr > m60:
+            status, score = "✅ 중기 상승 유지", 70
+        elif m20 < m60 < m120:
+            status, score = "💀 강력 하락 (역배열)", 10
+        else:
+            status, score = "⚖️ 변동성/혼조세", 50
+
+        mom = (curr / window_data.iloc[0] - 1) * 100
+        return {"상태": status, "점수": score, "모멘텀(3M)": f"{mom:+.2f}%"}
+
+
+    def color_status(val):
+        color_map = {"강력 상승": "#2ecc71", "강력 하락": "#e74c3c", "상승 유지": "#3498db"}
+        for key, color in color_map.items():
+            if key in val: return f'color: {color}; font-weight: bold'
+        return 'color: #f1c40f; font-weight: bold'
+
+
+    # =========================
+    # 📈 4. AI 분석 리포트 & 기상도
+    # =========================
+    st.markdown("---")
+    st.markdown(f"## 🤖 AI Multi-Asset Trend Report")
+
+    analysis_targets = ["NASDAQ", "Bitcoin", "Gold", "WTI", "KOSDAQ"]
+    trend_results = []
+    for t in analysis_targets:
+        if t in data.columns:
+            trend_results.append({"항목": t, **analyze_trend_fast(t, data, date_idx)})
+
+    if 'sector_df' in locals():
+        s_idx = sector_df.index.get_indexer([actual_date], method='nearest')[0]
+        for s_name in sector_df.columns:
+            res = analyze_trend_fast(s_name, sector_df, s_idx)
+            res["항목"] = f"Sector: {s_name}"
+            trend_results.append(res)
+
+    report_df = pd.DataFrame(trend_results)
+    col_l, col_r = st.columns([1.5, 1])
+
+    with col_l:
+        st.dataframe(report_df.style.map(color_status, subset=["상태"]).background_gradient(cmap="RdYlGn", subset=["점수"]),
+                     use_container_width=True, hide_index=True)
+
+    with col_r:
+        avg_s = report_df["점수"].mean()
+        if avg_s > 75:
+            st.success("#### AI 시장 진단\n시장이 매우 낙관적인 **강세장**입니다.")
+        elif avg_s < 35:
+            st.error("#### AI 시장 진단\n리스크 관리가 필요한 **약세장**입니다.")
+        else:
+            st.info("#### AI 시장 진단\n방향성을 탐색 중인 **박스권/혼조세**입니다.")
+
+    # =========================
+    # 🏭 5. 섹터 기상도 및 테마 분석 (최적화)
+    # =========================
+    st.markdown("### 🏭 Sector Weather Map")
+    if 'sector_df' in locals():
+        s_idx = sector_df.index.get_indexer([actual_date], method='nearest')[0]
+        p_idx = max(0, s_idx - 20)
+        met_cols = st.columns(len(sector_df.columns))
+        for i, col_name in enumerate(sector_df.columns):
+            ret = (sector_df[col_name].iloc[s_idx] / sector_df[col_name].iloc[p_idx] - 1) * 100
+            emoji = "☀️" if ret > 3 else "☁️" if ret > -1 else "🌧️"
+            met_cols[i].metric(col_name, f"{ret:.1f}%", emoji)
+
+    # 테마 추천 섹션
+    st.markdown("---")
+    st.markdown("## 🤖 AI 섹터/테마 일관성 분석")
+    daily_rets = data.pct_change().iloc[date_idx].fillna(0)
+    m_avg = daily_rets.mean()
+
+    # 테마 데이터 연산 (가중 평균 및 필터링)
+    theme_data = []
+    for theme in theme_pool:
+        for sector, info in SECTOR_MAP.items():
+            if theme in info["themes"]:
+                ticks = [t for t in info["anchors"].keys() if t in daily_rets.index]
+                if not ticks: continue
+                r_vals = daily_rets[ticks].values
+                rel_r = r_vals.mean() - m_avg
+                theme_data.append({"테마": theme, "섹터": sector, "상대수익률": rel_r, "점수": rel_r / (r_vals.std() + 1e-9)})
+
+    refined_df = pd.DataFrame(theme_data)
+    if not refined_df.empty:
+        refined_df["최종점수"] = (refined_df["점수"] * 0.6) + (refined_df.groupby("섹터")["점수"].transform("mean") * 0.4)
+        top_10 = refined_df.nlargest(10, "최종점수")
+        bottom_10 = refined_df[~refined_df["섹터"].isin(top_10["섹터"].unique())].nsmallest(10, "최종점수")
+        if len(bottom_10) < 5: bottom_10 = refined_df.nsmallest(10, "최종점수")
+
+        c1, c2 = st.columns(2)
+        c1.success("### 🟢 AI 추천 테마")
+        c1.dataframe(
+            top_10[["섹터", "테마", "상대수익률"]].style.format({"상대수익률": "+{:.2%}"}).background_gradient(cmap="Greens"),
+            use_container_width=True)
+        c2.error("### 🔴 AI 유의 테마")
+        c2.dataframe(
+            bottom_10[["섹터", "테마", "상대수익률"]].style.format({"상대수익률": "{:.2%}"}).background_gradient(cmap="Reds"),
+            use_container_width=True)
+
+# =========================================================
+# 💡 [중요] 에러 해결: 대시보드에서 사용할 데이터를 먼저 정의합니다.
+# =========================================================
+# 1. 현재 선택된 날짜의 인덱스 확인 (앞선 코드에서 정의된 date_idx 사용)
+# 2. 성장률(growth) 데이터에서 해당 날짜의 행만 추출하여 row_growth 생성
+if 'growth' in locals() and 'date_idx' in locals():
+    row_growth = growth.iloc[date_idx]
 else:
-    state = "⚖️ Neutral"
-    comment = "방향성 없는 혼조 흐름"
-
-st.markdown(f"## 🧠 Market Sentiment\n- **상태**: {state}\n- **Score**: {score:.4f}\n- **해석**: {comment}")
-
-# =========================
-# 🏭 섹터별 스코어 (신규 추가)
-# =========================
-st.markdown("## 🏭 Sector Analysis")
-
-sector_scores = {}
-for sector, info in SECTOR_MAP.items():
-    score = sum(
-        returns.get(ticker, 0) * weight
-        for ticker, weight in info["anchors"].items()
-    )
-    sector_scores[sector] = score
-
-sector_df = pd.DataFrame.from_dict(
-    sector_scores, orient="index", columns=["Score"]
-).sort_values("Score", ascending=False)
-
-sector_df["Status"] = sector_df["Score"].apply(
-    lambda x: "🟢 상승" if x > 0.005 else "🔴 하락" if x < -0.005 else "⚪ 보합"
-)
-
-st.dataframe(
-    sector_df.style.format({"Score": "{:.4%}"}),
-    use_container_width=True
-)
-
+    # 혹시라도 변수가 없을 경우를 대비한 방어 코드
+    st.error("데이터(growth) 또는 날짜 인덱스가 설정되지 않았습니다.")
+    st.stop()
 
 # =========================
-# 🤖 테마 추천 (개선된 버전)
+# 📈 4. AI Market Insight Dashboard (보완된 요약 대시보드)
 # =========================
-def get_theme_score_and_sector(theme, returns):
-    """테마별 스코어 및 소속 섹터 반환"""
-    for sector, info in SECTOR_MAP.items():
-        if theme in info["themes"]:
-            score = sum(
-                returns.get(ticker, 0) * weight
-                for ticker, weight in info["anchors"].items()
-            )
-            return score, sector
-    # 매핑되지 않은 테마는 전체 평균
-    return returns.mean(), "기타"
+st.markdown("## 📈 AI Market Insight Dashboard")
+summary_col1, summary_col2, summary_col3, summary_col4 = st.columns(4)
 
+with summary_col1:
+    # report_df가 정의되어 있는지 확인 후 점수 계산
+    if 'report_df' in locals() and not report_df.empty:
+        avg_score = report_df["점수"].mean()
+        sentiment = "매우 낙관" if avg_score > 80 else "낙관" if avg_score > 60 else "중립" if avg_score > 40 else "공포"
+        st.metric("Market Sentiment", f"{sentiment}", delta=f"{avg_score:.1f} pts")
+    else:
+        st.metric("Market Sentiment", "분석중...", delta="0 pts")
 
-theme_data = []
-for theme in theme_pool:
-    score, sector = get_theme_score_and_sector(theme, returns)
-    theme_data.append({"테마": theme, "스코어": score, "섹터": sector})
+with summary_col2:
+    # 실시간 변동성 계산
+    current_day_rets = data.pct_change().iloc[date_idx].fillna(0)
+    m_vol = current_day_rets.std() * 100
+    st.metric("Market Volatility", f"{'⚠️ 높음' if m_vol > 2 else '✅ 안정'}", delta=f"{m_vol:.2f}%")
 
-theme_df = pd.DataFrame(theme_data)
+with summary_col3:
+    # row_growth 기반 최고 자산 (에러 지점 해결)
+    best_asset = row_growth.idxmax()
+    st.metric("Best Asset", best_asset, delta=f"{row_growth[best_asset]:.2f}%")
 
-# 상위 10개, 하위 10개
-top_themes = theme_df.nlargest(10, "스코어")
-bottom_themes = theme_df.nsmallest(10, "스코어")
-
-st.markdown("## 🤖 AI Theme Recommendation")
-
-col_left, col_right = st.columns(2)
-
-with col_left:
-    st.markdown("### 🟢 투자 권고")
-    st.dataframe(
-        top_themes[["테마", "섹터", "스코어"]].style.format({"스코어": "{:.4%}"}),
-        use_container_width=True
-    )
-
-with col_right:
-    st.markdown("### 🔴 투자 유의")
-    st.dataframe(
-        bottom_themes[["테마", "섹터", "스코어"]].style.format({"스코어": "{:.4%}"}),
-        use_container_width=True
-    )
+with summary_col4:
+    # row_growth 기반 최저 자산 (에러 지점 해결)
+    worst_asset = row_growth.idxmin()
+    st.metric("Worst Asset", worst_asset, delta=f"{row_growth[worst_asset]:.2f}%", delta_color="inverse")
 
 # =========================
-# 📰 뉴스 (캐싱 적용)
+# 📰 5. 뉴스 분석 (링크 포함)
 # =========================
 st.markdown("---")
 st.markdown("## 📰 뉴스 분석")
+keywords = ["미국 금리", "한국 금리", "달러", "유가", "비트코인", "트럼프"]
 
-keywords = [
-    "미국 기준금리",
-    "한국 기준금리",
-    "달러",
-    "유가",
-    "AI 반도체",
-    "비트코인",
-    "중동",
-    "트럼프",
-    "원유"
-]
-
+# get_news 함수와 feedparser가 정의되어 있어야 합니다.
 news_cols = st.columns(3)
 for i, keyword in enumerate(keywords):
     with news_cols[i % 3]:
         st.markdown(f"**📌 {keyword}**")
-        news_list = get_news(keyword, 2)
-        for news in news_list:
-            st.markdown(f"- {news}")
+        try:
+            news_list = get_news(keyword, 2)
+            if news_list:
+                for news in news_list:
+                    # news가 딕셔너리 형태 {'title':..., 'link':...}인지 확인
+                    if isinstance(news, dict):
+                        st.markdown(f"- [{news['title']}]({news['link']})")
+                    else:
+                        st.markdown(f"- {news}")
+            else:
+                st.caption("관련 뉴스가 없습니다.")
+        except Exception as e:
+            st.caption(f"뉴스 로드 실패")
         st.markdown("---")
 
+import requests
+import feedparser
+import streamlit as st
+from urllib.parse import quote
+import re
+import html  # 특수 문자 변환(&quot; 등)을 위해 추가
+
 # =========================
-# 📊 요약 대시보드
+# 🛠 뉴스 데이터 정제 및 번역 함수
 # =========================
-st.markdown("## 📊 Summary Dashboard")
+def clean_text(text):
+    if not text: return ""
+    # 1. HTML 엔티티 변환 (&quot; -> ", &amp; -> & 등)
+    text = html.unescape(text)
+    # 2. HTML 태그 제거 (<a ...></a>, <img> 등)
+    text = re.sub(r'<[^>]+>', '', text)
+    # 3. 불필요한 줄바꿈 및 공백 정리
+    text = text.replace('\n', ' ').strip()
+    return text
 
-summary_col1, summary_col2, summary_col3, summary_col4 = st.columns(4)
 
-with summary_col1:
-    st.metric(
-        "Market Sentiment",
-        state.split()[1],
-        delta=f"{score:.4f}"
-    )
+@st.cache_data(ttl=3600)
+def get_global_news_ai(keyword_en, limit=2):
+    # 1. RSS URL 구조 최적화
+    encoded_keyword = quote(keyword_en)
+    rss_url = f"https://news.google.com/rss/search?q={encoded_keyword}&hl=en-US&gl=US&ceid=US:en"
 
-with summary_col2:
-    best_asset = row_growth.idxmax()
-    st.metric(
-        "Best Asset",
-        best_asset,
-        delta=f"{row_growth[best_asset]:.2f}%"
-    )
+    feed = feedparser.parse(rss_url)
 
-with summary_col3:
-    worst_asset = row_growth.idxmin()
-    st.metric(
-        "Worst Asset",
-        worst_asset,
-        delta=f"{row_growth[worst_asset]:.2f}%"
-    )
+    if not feed.entries:
+        return []
 
-with summary_col4:
-    best_sector = sector_df.index[0]
-    st.metric(
-        "Best Sector",
-        best_sector,
-        delta=f"{sector_df.loc[best_sector, 'Score']:.4%}"
-    )
+    summarized_news = []
+    for entry in feed.entries[:limit]:
+        # 기사 제목과 설명 정제
+        original_title = clean_text(entry.title)
+        # 구글 뉴스 summary에는 기사 링크 등 HTML이 많이 포함되어 있어 강한 정제 필요
+        raw_desc = clean_text(entry.summary) if 'summary' in entry else original_title
+        # 번역 API 전송을 위해 길이 제한
+        raw_desc = raw_desc[:250]
+
+        try:
+            # MyMemory API 번역 (제목)
+            t_url = f"https://api.mymemory.translated.net/get?q={quote(original_title[:150])}&langpair=en|ko"
+            t_res = requests.get(t_url, timeout=5).json()
+            translated_title = t_res.get('responseData', {}).get('translatedText', original_title)
+            translated_title = clean_text(translated_title) # 번역 결과물 정제
+
+            # 번역 결과 필터링
+            if "MYMEMORY WARNING" in translated_title or not translated_title:
+                translated_title = original_title
+
+            # MyMemory API 번역 (요약본)
+            d_url = f"https://api.mymemory.translated.net/get?q={quote(raw_desc[:250])}&langpair=en|ko"
+            d_res = requests.get(d_url, timeout=5).json()
+            translated_summary = d_res.get('responseData', {}).get('translatedText', "요약을 불러올 수 없습니다.")
+            translated_summary = clean_text(translated_summary) # 번역 결과물 정제
+
+            if "MYMEMORY WARNING" in translated_summary:
+                translated_summary = "원문을 참고해 주세요. (실시간 번역량 초과)"
+
+            summarized_news.append({
+                "title": translated_title,
+                "original_title": original_title,
+                "link": entry.link,
+                "summary": translated_summary
+            })
+        except Exception:
+            summarized_news.append({
+                "title": original_title,
+                "original_title": original_title,
+                "link": entry.link,
+                "summary": "내용 요약 및 번역 중 오류가 발생했습니다. 원문 링크를 확인하세요."
+            })
+
+    return summarized_news
+
+
+# =========================
+# 🌍 UI 레이아웃
+# =========================
+st.markdown("---")
+st.markdown("## 🌍 Global Perspective AI Summary")
+
+global_keywords = {
+    "미국 금리": "Federal Reserve FOMC",
+    "트럼프": "Donald Trump Election",
+    "지정학적 리스크": "Oil Middle East Tension",
+    "가상자산": "Bitcoin Crypto Regulation"
+}
+
+global_cols = st.columns(2)
+for i, (kr_name, en_keyword) in enumerate(global_keywords.items()):
+    with global_cols[i % 2]:
+        st.markdown(f"#### 🌐 {kr_name}")
+        news_data = get_global_news_ai(en_keyword, 2)
+
+        if not news_data:
+            st.caption("⚠️ 해당 키워드로 검색된 글로벌 뉴스가 없습니다.")
+        else:
+            for news in news_data:
+                # 제목이 너무 길면 자르되 클릭 가능하게 처리
+                with st.expander(f"📑 {news['title']}"):
+                    st.caption(f"Original: {news['original_title']}")
+                    st.info(f"**AI 번역 요약:** {news['summary']}")
+                    st.markdown(f"🔗 [기사 원문 읽기]({news['link']})")
+        st.markdown("---")
 
 # =========================
 # 🔚 Footer
 # =========================
 st.markdown("---")
-st.markdown("""
-<div style='text-align: center; color: gray; fon
-
-
-t-size: 12px;'>
-    🚀 Enhanced Financial Dashboard v2.0 | 데이터: Yahoo Finance | 뉴스: Google News RSS
+# actual_date 변수가 없을 경우 오늘 날짜 표시
+footer_date = actual_date.strftime('%Y-%m-%d') if 'actual_date' in locals() else "N/A"
+st.markdown(f"""
+<div style='text-align: center; color: gray; font-size: 12px;'>
+    🚀 Enhanced Financial Dashboard v2.0 | 분석 기준일: {footer_date}
 </div>
 """, unsafe_allow_html=True)
