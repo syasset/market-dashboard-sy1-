@@ -5,6 +5,7 @@ import plotly.graph_objects as go
 import feedparser
 import urllib.parse
 from datetime import datetime
+import pytz # ✅ 추가
 
 st.set_page_config(layout="wide")
 
@@ -56,10 +57,13 @@ for sector_info in SECTOR_MAP.values():
     theme_pool.extend(sector_info["themes"])
 
 # =========================
-# ⏱ 업데이트 시간
+# ⏱ 업데이트 시간 (한국 시간 기준)
 # =========================
+# 한국 시간대 설정
+korea_time = datetime.now(pytz.timezone("Asia/Seoul"))
+
 st.markdown(
-    f"<div style='text-align:right'>⏱ Last Update: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</div>",
+    f"<div style='text-align:right'>⏱ Last Update (KST): {korea_time.strftime('%Y-%m-%d %H:%M:%S')}</div>",
     unsafe_allow_html=True
 )
 
@@ -496,4 +500,3 @@ t-size: 12px;'>
     🚀 Enhanced Financial Dashboard v2.0 | 데이터: Yahoo Finance | 뉴스: Google News RSS
 </div>
 """, unsafe_allow_html=True)
-
