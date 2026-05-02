@@ -585,7 +585,7 @@ with summary_col4:
 # =========================
 st.markdown("---")
 st.markdown("## 📰 뉴스 분석")
-keywords = ["미국 금리", "한국 금리", "달러", "유가", "비트코인", "트럼프"]
+keywords = ["금리", "국채", "달러", "유가", "비트코인", "트럼프"]
 
 # get_news 함수와 feedparser가 정의되어 있어야 합니다.
 news_cols = st.columns(3)
