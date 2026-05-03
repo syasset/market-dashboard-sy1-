@@ -73,15 +73,17 @@ st.markdown(
 tickers = {
     "Bitcoin": "BTC-USD",
     "KOSPI": "^KS11",
+    "Dow Jones": "^DJI",
     "KOSDAQ": "^KQ11",
     "NASDAQ": "^IXIC",
     "S&P500": "^GSPC",
     "Gold": "GC=F",
     "WTI": "CL=F",
-    "Natural Gas": "NG=F"
+    "Natural Gas": "NG=F",
+    "USDKRW": "USDKRW=X"
 }
 
-usd_assets = ["Bitcoin", "NASDAQ", "S&P500", "Gold", "WTI", "Natural Gas"]
+usd_assets = ["Dow Jones", "Bitcoin", "NASDAQ", "S&P500", "Gold", "WTI", "Natural Gas"]
 
 
 # =========================
@@ -91,31 +93,40 @@ usd_assets = ["Bitcoin", "NASDAQ", "S&P500", "Gold", "WTI", "Natural Gas"]
 def load_data():
     try:
         raw = yf.download(list(tickers.values()), start="2018-01-01", progress=False)["Close"]
-
         if isinstance(raw.columns, pd.MultiIndex):
             raw.columns = raw.columns.get_level_values(1)
 
         ticker_to_name = {v: k for k, v in tickers.items()}
         data = raw.rename(columns=ticker_to_name)
 
-        # 🔥 순서 정렬
-        order = ["NASDAQ", "S&P500", "Gold", "WTI", "Natural Gas", "Bitcoin", "KOSPI", "KOSDAQ"]
+        # 정렬 순서에 Dow Jones 포함
+        order = ["Dow Jones", "NASDAQ", "S&P500", "Gold", "WTI", "Natural Gas", "Bitcoin", "KOSPI", "KOSDAQ", "USDKRW"]
         data = data[order]
-
         return data.ffill().bfill()
     except Exception as e:
         st.error(f"데이터 로드 오류: {e}")
         return pd.DataFrame()
 
-
 @st.cache_data(ttl=300)
-def load_fx():
+def load_macro():
+    macro_tickers = {"US10Y": "^TNX", "US2Y": "^IRX", "DXY": "DX-Y.NYB"}
     try:
-        fx = yf.download("KRW=X", start="2018-01-01", progress=False)["Close"]
-        return fx.squeeze().ffill().bfill()
+        df = yf.download(list(macro_tickers.values()), start="2018-01-01", progress=False)["Close"]
+        if isinstance(df.columns, pd.MultiIndex):
+            df = df.droplevel(0, axis=1)
+        df.columns = list(macro_tickers.keys())
+        return df.ffill().bfill()
     except Exception as e:
-        st.error(f"환율 데이터 로드 오류: {e}")
-        return pd.Series()
+        st.error(f"매크로 데이터 로드 오류: {e}")
+        return pd.DataFrame()
+
+
+data = load_data()
+macro = load_macro()
+
+if data.empty:
+    st.error("데이터 로드 실패")
+    st.stop()
 
 
 @st.cache_data(ttl=300)
@@ -148,25 +159,34 @@ def get_news(q, n=3):
         return ["뉴스를 불러올 수 없습니다."]
 
 
-# 데이터 로드
+# 1. 데이터 로드 (함수 통합으로 인해 load_fx 호출 삭제)
 data = load_data()
-fx = load_fx()
 macro = load_macro()
 
-# 빈 데이터 체크
-if data.empty or fx.empty:
+# 빈 데이터 체크 (fx 체크 삭제)
+if data.empty:
     st.error("데이터 로드에 실패했습니다. 잠시 후 다시 시도해주세요.")
     st.stop()
 
 # =========================
 # 💱 KRW 환산
 # =========================
-fx_align = fx.reindex(data.index).ffill().bfill()
-data_krw = data.copy()
+# [수정] 이제 fx라는 별도 변수 대신 data['USDKRW']를 사용합니다.
+chart_data = data.drop(columns=["USDKRW"]) # 차트에서 환율 선 제외
+fx_series = data["USDKRW"]                # 시계열 환율 추출
+
+data_krw = chart_data.copy()
 
 for col in usd_assets:
     if col in data_krw.columns:
-        data_krw[col] = data[col].values * fx_align.values
+        # fx_series를 사용하여 각 날짜별로 환율을 곱함
+        data_krw[col] = chart_data[col] * fx_series
+
+def calculate_growth(df):
+    return (df / df.iloc[0] - 1) * 100
+
+growth = calculate_growth(chart_data)
+macro_growth = calculate_growth(macro) if not macro.empty else pd.DataFrame()
 
 
 # =========================
@@ -200,38 +220,180 @@ else:
 # =========================
 st.markdown("## 🌍📊 지수, 섹터별 지표")
 st.markdown(f"### 🌍📈 지수차트")
+
 if not growth.empty:
     fig = go.Figure()
 
-    for col in growth.columns:
+    # 시인성 높은 고대비 커스텀 색상 팔레트
+    custom_colors = [
+        "#1f77b4", "#ff7f0e", "#2ca02c", "#d62728",
+        "#9467bd", "#8c564b", "#e377c2", "#7f7f7f",
+        "#bcbd22", "#17becf"
+    ]
+
+    last_points = []
+
+    # [수정 포인트] USDKRW를 제외하고 차트를 그립니다.
+    for i, col in enumerate(growth.columns):
+        if col == "USDKRW":  # ✅ 환율은 선 차트에서 제외
+            continue
+
+        line_color = custom_colors[i % len(custom_colors)]
+
+        # 차트 선 그리기
         fig.add_trace(go.Scatter(
             x=growth.index,
             y=growth[col],
-            customdata=data_krw[col],
+            customdata=data_krw[col],  # 이제 여기서 KeyError가 발생하지 않습니다.
             name=col,
-            hovertemplate="📅 %{x|%Y-%m-%d}<br>%{fullData.name}<br>📈 %{y:.2f}%<br>💰 %{customdata:,.0f}<extra></extra>"
+            mode='lines',
+            line=dict(width=1.5, color=line_color),  # 두께 조정 포인트
+            hovertemplate="📅 %{x|%Y-%m-%d}<br><b>%{fullData.name}</b><br>📈 %{y:.2f}%<br>💰 %{customdata:,.0f}<extra></extra>"
         ))
 
-    fig.update_layout(template="plotly_dark", dragmode="pan", height=600)
+        last_points.append({
+            "col": col,
+            "y": growth[col].iloc[-1],
+            "val": data_krw[col].iloc[-1],
+            "color": line_color
+        })
+
+    # 2. Y축 정렬 및 지그재그 태그 로직
+    last_points.sort(key=lambda x: x['y'], reverse=True)
+
+    for i, p in enumerate(last_points):
+        is_right = i % 2 == 0
+        side_offset = 80 if is_right else -80
+        x_anchor = "left" if is_right else "right"
+
+        fig.add_annotation(
+            x=growth.index[-1],
+            y=p['y'],
+            text=f"<b>{p['col']}</b><br>{p['val']:,.0f}",
+            showarrow=True,
+            arrowhead=1,
+            arrowsize=0.8,  # 화살표 크기도 선 두께에 맞춰 살짝 줄임
+            arrowwidth=1,
+            arrowcolor=p['color'],
+            ax=side_offset,
+            ay=0,
+            xanchor=x_anchor,
+            yanchor="middle",
+            font=dict(size=10, color="white"),  # 텍스트 크기 미세 조정
+            bgcolor=p['color'],
+            opacity=0.8,
+            bordercolor="white",
+            borderwidth=0.5,
+            borderpad=3
+        )
+
+    # 3. 레이아웃 설정
+    fig.update_layout(
+        template="plotly_dark",
+        dragmode="pan",
+        height=650,
+        margin=dict(l=90, r=90, t=80, b=50),
+        showlegend=True,
+        legend=dict(
+            orientation="h",
+            yanchor="bottom",
+            y=1.02,
+            xanchor="right",
+            x=1,
+            font=dict(size=11)
+        ),
+        xaxis=dict(showgrid=False),
+        yaxis=dict(zeroline=True, zerolinecolor="rgba(255,255,255,0.2)")
+    )
+
     st.plotly_chart(fig, use_container_width=True, config={"scrollZoom": True})
 
 # =========================
 # 🌍 매크로 차트
 # =========================
-st.markdown(f"### 🌍📈 매크로(거시) 경제 차트")
+st.markdown(f"### 🌍 📊 매크로(거시) 경제 차트")
+
+improved_colors = [
+    "#1f77b4",  # 진한 파랑
+    "#d62728",  # 진한 빨강
+    "#2ca02c",  # 숲색 (진녹색)
+    "#ff7f0e",  # 짙은 주황
+    "#9467bd",  # 보라
+    "#17becf",  # 청록
+    "#e377c2",  # 핑크 (마젠타 계열)
+    "#8c564b",  # 갈색
+    "#4169E1",  # 로열 블루
+    "#008080"  # 틸(Teal)
+]
+
+# --- 매크로 차트 적용 예시 ---
 if not macro_growth.empty:
     fig2 = go.Figure()
+    last_points_macro = []
 
-    for col in macro_growth.columns:
+    for i, col in enumerate(macro_growth.columns):
+        # 개선된 팔레트 사용
+        line_color = improved_colors[i % len(improved_colors)]
+
         fig2.add_trace(go.Scatter(
             x=macro_growth.index,
             y=macro_growth[col],
             customdata=macro[col],
             name=col,
-            hovertemplate="📅 %{x|%Y-%m-%d}<br>%{fullData.name}<br>📈 %{y:.2f}%<br>💰 %{customdata:.2f}<extra></extra>"
+            mode='lines',
+            line=dict(width=1.5, color=line_color),
+            hovertemplate="📅 %{x|%Y-%m-%d}<br><b>%{fullData.name}</b><br>📈 %{y:.2f}%<br>💎 %{customdata:.2f}<extra></extra>"
         ))
 
-    fig2.update_layout(template="plotly_dark", dragmode="pan", height=500)
+        last_points_macro.append({
+            "col": col, "y": macro_growth[col].iloc[-1],
+            "val": macro[col].iloc[-1], "color": line_color
+        })
+
+    # (이후 정렬 및 지그재그 태그 로직은 이전과 동일)
+    last_points_macro.sort(key=lambda x: x['y'], reverse=True)
+
+    for i, p in enumerate(last_points_macro):
+        is_right = i % 2 == 0
+        side_offset = 80 if is_right else -80
+
+        fig2.add_annotation(
+            x=macro_growth.index[-1],
+            y=p['y'],
+            text=f"<b>{p['col']}</b><br>{p['val']:.2f}",
+            showarrow=True,
+            arrowcolor=p['color'],
+            ax=side_offset,
+            ay=0,
+            xanchor="left" if is_right else "right",
+            yanchor="middle",
+            font=dict(size=10, color="white"),  # 흰색 글자가 잘 보이도록 배경색 대비 강화
+            bgcolor=p['color'],  # 태그 배경이 이제 더 짙은 색이라 글자가 잘 보입니다
+            opacity=0.9,  # 가독성을 위해 불투명도 살짝 상향
+            bordercolor="white",
+            borderwidth=0.5,
+            borderpad=3
+        )
+
+    # 4. 레이아웃 설정
+    fig2.update_layout(
+        template="plotly_dark",
+        dragmode="pan",
+        height=600,  # 태그 가독성을 위해 높이 확보
+        margin=dict(l=90, r=90, t=80, b=50),
+        showlegend=True,
+        legend=dict(
+            orientation="h",
+            yanchor="bottom",
+            y=1.02,
+            xanchor="right",
+            x=1,
+            font=dict(size=11)
+        ),
+        xaxis=dict(showgrid=False),
+        yaxis=dict(zeroline=True, zerolinecolor="rgba(255,255,255,0.2)")
+    )
+
     st.plotly_chart(fig2, use_container_width=True, config={"scrollZoom": True})
 
 # =========================
@@ -351,6 +513,7 @@ if not macro_growth.empty:
     import pandas as pd
     import numpy as np
     import streamlit as st
+    import yfinance as yf
     import feedparser  # pip install feedparser 필요
 
     @st.cache_data(ttl=3600)
@@ -368,6 +531,11 @@ if not macro_growth.empty:
     # =========================
     # 📅 1. 날짜 제어 및 인덱싱 (최적화)
     # =========================
+    import pandas as pd
+    import streamlit as st
+    import yfinance as yf
+    import numpy as np
+
     data.index = pd.to_datetime(data.index)
     dates = data.index
 
@@ -376,7 +544,7 @@ if not macro_growth.empty:
 
     st.markdown("## 📅 기간별 AI 시장분석")
 
-    # Timeline Slider & Dropdowns (레이아웃 통합)
+    # Timeline Slider & Dropdowns
     slider_value = st.select_slider("📊 Timeline", options=list(dates), value=st.session_state.selected_date,
                                     key="slider_v2")
 
@@ -404,63 +572,58 @@ if not macro_growth.empty:
         st.session_state.selected_date = final_date
         st.rerun()
 
-    # 기준 인덱스 고정 (이후 모든 계산에서 재사용)
+    # 기준 인덱스 고정
     date_idx = dates.get_indexer([st.session_state.selected_date], method="nearest")[0]
     actual_date = dates[date_idx]
 
     # =========================
-    # 📊 2. Selected Date Analysis (요청하신 수치 표)
+    # 📊 2. Selected Date Analysis (보정된 환율 로직 반영)
     # =========================
-    # 타이틀 🇰🇷
-    # --- 환율 데이터 가져오는 코드 추가 ---
-    try:
-        # yfinance를 이용해 원/달러 환율(USDKRW=X)의 가장 최근 종가를 가져옵니다.
-        # 만약 기존 코드에서 이미 환율을 다운로드하고 있다면 그 변수명을 사용하세요.
-        ex_data = yf.download("USDKRW=X", period="1d", progress=False)
-        exchange_rate = ex_data['Close'].iloc[-1]
-    except Exception:
-        # 환율 로드 실패 시 기본값 설정 (에러 방지용)
-        exchange_rate = 1474.0  # 현재 대략적인 환율
-
-    # 만약 exchange_rate가 Series 형태로 오면 숫자로 변환
-    if hasattr(exchange_rate, 'values'):
-        exchange_rate = float(exchange_rate.values[0])
-    # ----------------------------------
 
     st.markdown("---")
-    st.markdown(f"### 📊 🇰🇷 지수별 정리표 ({actual_date.strftime('%Y-%m-%d %H:%M')})")
+    st.markdown(f"### 📊 지수별 정리표 ({actual_date.strftime('%Y-%m-%d %H:%M')})")
 
-    # ... 이후 기존의 usd_values 보정 코드 계속 ...
+    # [수정 포인트] 선택한 날짜의 실제 환율 추출
+    current_fx = float(data.loc[actual_date, "USDKRW"])
 
-    # 1. 데이터 복사
-    usd_values = data.iloc[date_idx].copy()
-    krw_values = data_krw.iloc[date_idx].copy()
+    # 데이터 복사 (차트용으로 쓰인 data_krw가 아닌 순수 USD 데이터 기준)
+    usd_values = chart_data.iloc[date_idx].copy()
+    growth_values = growth.iloc[date_idx].copy()
 
-    # 2. 인덱스 이름을 확인하여 강제로 환율 계산 적용
-    # 인덱스가 '^KS11'이든 'KOSPI'이든 글자가 포함만 되어 있으면 계산합니다.
-    for label in usd_values.index:
-        target_label = str(label).upper()  # 대문자로 통일해서 비교
+    # KRW 값 계산 (선택된 날짜의 환율 current_fx를 곱함)
+    krw_values = usd_values.copy()
+    for col in usd_assets:
+        krw_values[col] = usd_values[col] * current_fx
 
-        if "KS11" in target_label or "KOSPI" in target_label or "코스피" in target_label:
-            # 코스피 보정: KRW 값(6,599)을 환율(1,474)로 나눔 -> 4.48
-            usd_values[label] = krw_values[label] / exchange_rate
+    # 한국 지수 처리 (한국 지수는 이미 KRW이므로 USD를 역산)
+    for col in ["KOSPI", "KOSDAQ"]:
+        if col in krw_values.index:
+            usd_values[col] = krw_values[col] / current_fx
 
-        elif "KQ11" in target_label or "KOSDAQ" in target_label or "코스닥" in target_label:
-            # 코스닥 보정
-            usd_values[label] = krw_values[label] / exchange_rate
-
-    # 3. 데이터프레임 생성
+    # 데이터프레임 생성
     df_view = pd.DataFrame({
-        "성장률 (%)": growth.iloc[date_idx],
+        "성장률 (%)": growth_values,
         "USD 값": usd_values,
         "KRW 값": krw_values
     })
 
-    # 4. 출력 포맷 설정
+    # ✅ [추가된 부분] 중복되는 기존 USDKRW 행 삭제
+    if "USDKRW" in df_view.index:
+        df_view = df_view.drop("USDKRW")
+
+    # 환율 행 추가 (가독성이 좋은 이름으로 새로 추가)
+    exchange_row = pd.DataFrame({
+        "성장률 (%)": [0.00],
+        "USD 값": [1.00],
+        "KRW 값": [current_fx]
+    }, index=["USDKRW (환율)"])
+
+    df_view = pd.concat([df_view, exchange_row])
+
     st.dataframe(df_view.style.format({
         "성장률 (%)": "{:.2f}",
-        "USD 값": "{:,.2f}",  # 이제 4.48로 표시됩니다.
-        "KRW 값": "{:,.0f}"  # 6,599로 표시됩니다.
+        "USD 값": "{:,.2f}",
+        "KRW 값": "{:,.2f}" if current_fx < 100 else "{:,.0f}"
     }), use_container_width=True)
 
 
