@@ -797,12 +797,12 @@ st.markdown("---")
 st.markdown("### 🌐 글로벌 뉴스")
 
 global_keywords = {
-    "미국 금리": "Federal Reserve FOMC",
-    "미국": "Donald Trump Election",
+    "미국 금리": "(Treasuries",
+    "미국": "Donald Trump Election US",
     "지정학적 리스크": "Oil Middle East Tension",
     "가상자산": "Bitcoin Crypto Regulation",
-    "중국": "China",
-    "한국": "Korea"
+    "중국": "China US relations invasion of Taiwan",
+    "한국": "Korea Debt to GDP"
 }
 
 global_cols = st.columns(2)
@@ -826,4 +826,3 @@ for i, (kr_name, en_keyword) in enumerate(global_keywords.items()):
 # 🔚 Footer
 # =========================
 st.markdown(f"<div style='text-align: center; color: gray; margin-top: 50px;'>🚀 v2.1 Optimized Dashboard | {actual_date.strftime('%Y-%m-%d')}</div>", unsafe_allow_html=True)
-
