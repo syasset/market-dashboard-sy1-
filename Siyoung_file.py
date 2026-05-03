@@ -303,26 +303,41 @@ if not macro_growth.empty:
 
     # 📊 섹터 및 종목 매핑
     sector_map = {
-        "반도체": {"tickers": ["005930.KS", "000660.KS"], "names": ["삼성전자", "SK하이닉스"]},
-        "자동차": {"tickers": ["005380.KS", "000270.KS"], "names": ["현대차", "기아"]},
-        "방산": {"tickers": ["012450.KS", "272210.KS"], "names": ["한화에어로스페이스", "한화시스템"]},
-        "소프트웨어": {"tickers": ["035420.KS", "035720.KS"], "names": ["NAVER", "카카오"]},
-        "우주항공": {"tickers": ["047810.KS", "079550.KS"], "names": ["한국항공우주", "LIG넥스원"]},
-        "휴머노이드 로봇": {"tickers": ["068270.KS"], "names": ["셀트리온(예시)"]},
-        "식료품": {"tickers": ["097950.KS", "271560.KS"], "names": ["CJ제일제당", "오리온"]},
-        "건설": {"tickers": ["000720.KS", "028050.KS"], "names": ["현대건설", "DL이앤씨"]}
+        "반도체": {"tickers": ["005930.KS", "000660.KS", "NVDA", "TSM", "INTC", "AMD"],
+        "names": ["삼성전자", "SK하이닉스", "엔비디아", "TSMC", "인텔", "AMD"]},
+        "자동차": {"tickers": ["005380.KS", "000270.KS", "TSLA", "F"],
+        "names": ["현대차", "기아", "테슬라", "포드 모터"]},
+        "방산": {"tickers": ["012450.KS", "272210.KS", "003490.KS", "LMT","PLTR"],
+        "names": ["한화에어로스페이스", "한화시스템", "대한항공", "록히드마틴", "팔란티어"]},
+        "소프트웨어": {"tickers": ["035420.KS", "035720.KS", "MSFT", "GOOGL", "GOOG", "META", "ORCL"],
+        "names": ["NAVER", "카카오", "마이크로소프트", "구글(알파벳 Class A)", "구글(알파벳 Class C)", "메타", "오라클"]},
+        "우주항공": {"tickers": ["047810.KS", "012450.KS", "003490.KS", "079550.KS", "RKLB"],
+        "names": ["한국항공우주", "한화에어로스페이스","대한항공", "LIG넥스원", "로켓랩"]},
+        "해운/유통": {"tickers": ["042660.KS", "011200.KS", "005880.KS", "000120.KS", "AMZN", "WMT", "CPNG", "GD"],
+        "names": ["한화오션", "HMM", "대한해운", "CJ대한통운", "아마존닷컴", "월마트", "쿠팡", "제너럴 다이내믹스"]},
+        "에너지": {"tickers": ["015760.KS", "298040.KS", "034020.KS", "010120.KS", "229640.KS", "267260.KS"],
+        "names": ["한국전력", "효성중공업", "두산에너빌리티", "LS ELECTRIC", "LS에코에너지", "HD현대일렉트릭"]},
+        "건설": {"tickers": ["000720.KS", "028050.KS", "028260.KS", "006360.KS"],
+        "names": ["현대건설", "DL이앤씨", "삼성물산", "GS건설"]}
     }
 
     # 📥 데이터 다운로드 및 수익률 계산
     all_tickers = [t for v in sector_map.values() for t in v["tickers"]]
     stock_list = list(set(all_tickers))
 
+    # 📥 데이터 다운로드 부분 수정
     raw = yf.download(stock_list, period=yf_period, progress=False)["Close"]
+
+    # MultiIndex 대응 (yfinance 버전에 따라 다름)
     if isinstance(raw.columns, pd.MultiIndex):
         raw.columns = raw.columns.get_level_values(1)
 
+    # 중요: 해외 주식과 한국 주식의 시차 때문에 발생하는 NaN을 앞뒤로 꽉 채워줘야 계산이 됨
     data_sector = raw.ffill().bfill()
 
+
+    # 데이터가 잘 불러와졌는지 디버깅용 (나중에 삭제)
+    #st.write(data_sector.columns) # 내가 요청한 티커들이 컬럼명에 다 있는지 확인
 
     def build_sector_index(sector_map, data_sector):
         sector_df = pd.DataFrame(index=data_sector.index)
