@@ -5,56 +5,36 @@ import plotly.graph_objects as go
 import feedparser
 import urllib.parse
 from datetime import datetime
-import pytz # ✅ 추가
+import pytz
+import requests
+import re
+import html
+from urllib.parse import quote
 
-st.set_page_config(layout="wide")
+st.set_page_config(layout="wide", page_title="AI Financial Dashboard")
 
 # =========================
 # 📊 섹터 매핑 설정
 # =========================
 SECTOR_MAP = {
-    "Tech": {
-        "themes": ["AI", "반도체", "클라우드", "소프트웨어", "데이터센터", "로봇"],
-        "anchors": {"NASDAQ": 0.6, "S&P500": 0.3, "KOSDAQ": 0.1}
-    },
-    "Energy": {
-        "themes": ["에너지", "정유", "LNG", "원유", "WTI", "천연가스"],
-        "anchors": {"WTI": 0.5, "Natural Gas": 0.3, "S&P500": 0.2}
-    },
-    "GreenEnergy": {
-        "themes": ["태양광", "풍력", "수소", "원자력", "2차전지"],
-        "anchors": {"NASDAQ": 0.3, "KOSPI": 0.3, "KOSDAQ": 0.3, "S&P500": 0.1}
-    },
-    "Crypto": {
-        "themes": ["비트코인", "블록체인", "핀테크"],
-        "anchors": {"Bitcoin": 0.8, "NASDAQ": 0.2}
-    },
-    "Defensive": {
-        "themes": ["금", "채권", "리츠", "유틸리티"],
-        "anchors": {"Gold": 0.7, "S&P500": 0.2, "KOSPI": 0.1}
-    },
-    "Industrial": {
-        "themes": ["자동차", "전기차", "조선", "철강", "방산", "우주항공", "드론", "건설", "화학"],
-        "anchors": {"S&P500": 0.4, "KOSPI": 0.4, "WTI": 0.1, "Natural Gas": 0.1}
-    },
-    "Healthcare": {
-        "themes": ["헬스케어", "제약", "바이오"],
-        "anchors": {"NASDAQ": 0.4, "S&P500": 0.4, "KOSPI": 0.2}
-    },
-    "Consumer": {
-        "themes": ["항공", "여행", "카지노", "엔터", "미디어", "게임", "유통", "물류", "식품", "플랫폼", "교육"],
-        "anchors": {"S&P500": 0.4, "KOSPI": 0.3, "KOSDAQ": 0.2, "NASDAQ": 0.1}
-    },
-    "KoreaSpecial": {
-        "themes": ["KOSPI대형주", "스마트팜"],
-        "anchors": {"KOSPI": 0.7, "KOSDAQ": 0.3}
-    }
+    "Tech": {"themes": ["AI", "반도체", "클라우드", "소프트웨어", "데이터센터", "로봇"], "anchors": {"NASDAQ": 0.6, "S&P500": 0.3, "KOSDAQ": 0.1}},
+    "Energy": {"themes": ["에너지", "정유", "LNG", "원유", "WTI", "천연가스"], "anchors": {"WTI": 0.5, "Natural Gas": 0.3, "S&P500": 0.2}},
+    "GreenEnergy": {"themes": ["태양광", "풍력", "수소", "원자력", "2차전지"], "anchors": {"NASDAQ": 0.3, "KOSPI": 0.3, "KOSDAQ": 0.3, "S&P500": 0.1}},
+    "Crypto": {"themes": ["비트코인", "블록체인", "핀테크"], "anchors": {"Bitcoin": 0.8, "NASDAQ": 0.2}},
+    "Defensive": {"themes": ["금", "채권", "리츠", "유틸리티"], "anchors": {"Gold": 0.7, "S&P500": 0.2, "KOSPI": 0.1}},
+    "Industrial": {"themes": ["자동차", "전기차", "조선", "철강", "방산", "우주항공", "드론", "건설", "화학"], "anchors": {"S&P500": 0.4, "KOSPI": 0.4, "WTI": 0.1, "Natural Gas": 0.1}},
+    "Healthcare": {"themes": ["헬스케어", "제약", "바이오"], "anchors": {"NASDAQ": 0.4, "S&P500": 0.4, "KOSPI": 0.2}},
+    "Consumer": {"themes": ["항공", "여행", "카지노", "엔터", "미디어", "게임", "유통", "물류", "식품", "플랫폼", "교육"], "anchors": {"S&P500": 0.4, "KOSPI": 0.3, "KOSDAQ": 0.2, "NASDAQ": 0.1}},
+    "KoreaSpecial": {"themes": ["KOSPI대형주", "스마트팜"], "anchors": {"KOSPI": 0.7, "KOSDAQ": 0.3}}
 }
 
-# 전체 테마 풀 (섹터 맵에서 자동 생성)
-theme_pool = []
-for sector_info in SECTOR_MAP.values():
-    theme_pool.extend(sector_info["themes"])
+theme_pool = [t for s in SECTOR_MAP.values() for t in s["themes"]]
+tickers = {
+    "Dow Jones": "^DJI", "NASDAQ": "^IXIC", "S&P500": "^GSPC", "Bitcoin": "BTC-USD",
+    "KOSPI": "^KS11", "KOSDAQ": "^KQ11", "Gold": "GC=F", "WTI": "CL=F",
+    "Natural Gas": "NG=F", "USDKRW": "USDKRW=X"
+}
+usd_assets = ["Dow Jones", "Bitcoin", "NASDAQ", "S&P500", "Gold", "WTI", "Natural Gas"]
 
 # =========================
 # ⏱ 업데이트 시간 (한국 시간 기준)
@@ -87,133 +67,41 @@ usd_assets = ["Dow Jones", "Bitcoin", "NASDAQ", "S&P500", "Gold", "WTI", "Natura
 
 
 # =========================
-# 📊 데이터 로드 (개선된 버전)
+# 📊 데이터 로드 및 처리함수
 # =========================
-@st.cache_data(ttl=300)
-def load_data():
-    try:
-        raw = yf.download(list(tickers.values()), start="2018-01-01", progress=False)["Close"]
-        if isinstance(raw.columns, pd.MultiIndex):
-            raw.columns = raw.columns.get_level_values(1)
+@st.cache_data(ttl=600)
+def load_all_data():
+    # 지수 데이터
+    raw = yf.download(list(tickers.values()), start="2018-01-01", progress=False)["Close"]
+    if isinstance(raw.columns, pd.MultiIndex): raw = raw.droplevel(0, axis=1)
+    ticker_to_name = {v: k for k, v in tickers.items()}
+    data = raw.rename(columns=ticker_to_name).ffill().bfill()
 
-        ticker_to_name = {v: k for k, v in tickers.items()}
-        data = raw.rename(columns=ticker_to_name)
+    # 매크로 데이터
+    m_tickers = {"US10Y": "^TNX", "US2Y": "^IRX", "DXY": "DX-Y.NYB"}
+    macro_raw = yf.download(list(m_tickers.values()), start="2018-01-01", progress=False)["Close"]
+    if isinstance(macro_raw.columns, pd.MultiIndex): macro_raw = macro_raw.droplevel(0, axis=1)
+    macro = macro_raw.rename(columns={v: k for k, v in m_tickers.items()}).ffill().bfill()
 
-        # 정렬 순서에 Dow Jones 포함
-        order = ["Dow Jones", "NASDAQ", "S&P500", "Gold", "WTI", "Natural Gas", "Bitcoin", "KOSPI", "KOSDAQ", "USDKRW"]
-        data = data[order]
-        return data.ffill().bfill()
-    except Exception as e:
-        st.error(f"데이터 로드 오류: {e}")
-        return pd.DataFrame()
+    return data, macro
 
-@st.cache_data(ttl=300)
-def load_macro():
-    macro_tickers = {"US10Y": "^TNX", "US2Y": "^IRX", "DXY": "DX-Y.NYB"}
-    try:
-        df = yf.download(list(macro_tickers.values()), start="2018-01-01", progress=False)["Close"]
-        if isinstance(df.columns, pd.MultiIndex):
-            df = df.droplevel(0, axis=1)
-        df.columns = list(macro_tickers.keys())
-        return df.ffill().bfill()
-    except Exception as e:
-        st.error(f"매크로 데이터 로드 오류: {e}")
-        return pd.DataFrame()
-
-
-data = load_data()
-macro = load_macro()
-
-if data.empty:
-    st.error("데이터 로드 실패")
-    st.stop()
-
-
-@st.cache_data(ttl=300)
-def load_macro():
-    macro_tickers = {
-        "US10Y": "^TNX",
-        "US2Y": "^IRX",
-        "DXY": "DX-Y.NYB",
-        "USDKRW": "KRW=X"
-    }
-
-    try:
-        df = yf.download(list(macro_tickers.values()), start="2018-01-01", progress=False)["Close"]
-        if isinstance(df.columns, pd.MultiIndex):
-            df = df.droplevel(0, axis=1)
-        df.columns = list(macro_tickers.keys())
-        return df.ffill().bfill()
-    except Exception as e:
-        st.error(f"매크로 데이터 로드 오류: {e}")
-        return pd.DataFrame()
-
-
-@st.cache_data(ttl=600)  # 10분 캐시
-def get_news(q, n=3):
-    url = f"https://news.google.com/rss/search?q={urllib.parse.quote(q)}&hl=ko&gl=KR&ceid=KR:ko"
-    try:
-        feed = feedparser.parse(url)
-        return [e.title for e in feed.entries[:n]]
-    except Exception:
-        return ["뉴스를 불러올 수 없습니다."]
-
-
-# 1. 데이터 로드 (함수 통합으로 인해 load_fx 호출 삭제)
-data = load_data()
-macro = load_macro()
-
-# 빈 데이터 체크 (fx 체크 삭제)
-if data.empty:
-    st.error("데이터 로드에 실패했습니다. 잠시 후 다시 시도해주세요.")
-    st.stop()
-
-# =========================
-# 💱 KRW 환산
-# =========================
-# [수정] 이제 fx라는 별도 변수 대신 data['USDKRW']를 사용합니다.
-chart_data = data.drop(columns=["USDKRW"]) # 차트에서 환율 선 제외
-fx_series = data["USDKRW"]                # 시계열 환율 추출
-
-data_krw = chart_data.copy()
-
-for col in usd_assets:
-    if col in data_krw.columns:
-        # fx_series를 사용하여 각 날짜별로 환율을 곱함
-        data_krw[col] = chart_data[col] * fx_series
 
 def calculate_growth(df):
+    # 벡터 연산으로 속도 최적화
     return (df / df.iloc[0] - 1) * 100
 
-growth = calculate_growth(chart_data)
-macro_growth = calculate_growth(macro) if not macro.empty else pd.DataFrame()
 
-
-# =========================
-# 📊 성장률 계산 (최적화된 버전)
-# =========================
-def calculate_growth(df):
-    growth = pd.DataFrame(index=df.index)
-    for col in df.columns:
-        first_valid_idx = df[col].first_valid_index()
-        if first_valid_idx is not None:
-            first_value = df.loc[first_valid_idx, col]
-            if first_value != 0:
-                growth[col] = (df[col] / first_value - 1) * 100
-            else:
-                growth[col] = 0
-        else:
-            growth[col] = 0
-    return growth
-
-
+# 데이터 로딩
+data, macro = load_all_data()
 growth = calculate_growth(data)
+macro_growth = calculate_growth(macro)
 
-# 매크로 성장률 (개선된 버전)
-if not macro.empty:
-    macro_growth = calculate_growth(macro)
-else:
-    macro_growth = pd.DataFrame()
+# KRW 환산 시계열 (차트용)
+chart_data = data.drop(columns=["USDKRW"])
+data_krw = chart_data.copy()
+for col in usd_assets:
+    data_krw[col] = chart_data[col] * data["USDKRW"]
+
 
 # =========================
 # 📊 자산 차트
@@ -399,11 +287,6 @@ if not macro_growth.empty:
 # =========================
 # 📅 기간별 섹터 분석 선택
 # =========================
-    import streamlit as st
-    import yfinance as yf
-    import pandas as pd
-    import plotly.graph_objects as go
-
     st.markdown(f"### 📅📈 기간별 섹터 분석")
 
     # 1. 기간 설정 및 데이터 준비
@@ -509,13 +392,6 @@ if not macro_growth.empty:
     # =========================
     # 🛠 0. 뉴스 가져오기 함수 (링크 포함)
     # =========================
-
-    import pandas as pd
-    import numpy as np
-    import streamlit as st
-    import yfinance as yf
-    import feedparser  # pip install feedparser 필요
-
     @st.cache_data(ttl=3600)
     def get_news(keyword, limit=2):
         rss_url = f"https://news.google.com/rss/search?q={keyword}&hl=ko&gl=KR&ceid=KR:ko"
@@ -531,105 +407,121 @@ if not macro_growth.empty:
     # =========================
     # 📅 1. 날짜 제어 및 인덱싱 (최적화)
     # =========================
-    import pandas as pd
-    import streamlit as st
-    import yfinance as yf
-    import numpy as np
-
-    data.index = pd.to_datetime(data.index)
-    dates = data.index
-
-    if "selected_date" not in st.session_state:
-        st.session_state.selected_date = dates[-1]
-
+    # =========================
+    # 📅 날짜 선택 및 상호 동기화 로직
+    # =========================
     st.markdown("## 📅 기간별 AI 시장분석")
 
-    # Timeline Slider & Dropdowns
-    slider_value = st.select_slider("📊 Timeline", options=list(dates), value=st.session_state.selected_date,
-                                    key="slider_v2")
+    # 1. 데이터 인덱스 처리
+    data.index = pd.to_datetime(data.index)
+    available_dates = data.index.unique()
 
-    current = pd.to_datetime(st.session_state.selected_date)
-    col1, col2, col3, col4 = st.columns(4)
-    with col1:
-        year = st.selectbox("Year", sorted(dates.year.unique()), index=sorted(dates.year.unique()).index(current.year))
-    with col2:
-        month = st.selectbox("Month", range(1, 13), index=current.month - 1)
-    with col3:
-        day = st.selectbox("Day", range(1, 32), index=min(current.day - 1, 30))
-    with col4:
-        hour = st.selectbox("Hour", range(0, 24), index=current.hour)
+    if "selected_date" not in st.session_state:
+        st.session_state.selected_date = available_dates[-1]
 
-    # 날짜 확정 로직
-    try:
-        dt_input = pd.to_datetime(f"{year}-{month:02d}-{day:02d} {hour:02d}:00:00")
-        dropdown_val = dates[dates.get_indexer([dt_input], method="nearest")[0]]
-    except:
-        dropdown_val = slider_value
+    # 2. 정밀 조정을 위한 드롭다운 (연/월/일/시)
+    # 현재 선택된 날짜에서 각 구성 요소 추출
+    curr_date = st.session_state.selected_date
 
-    final_date = slider_value if slider_value != st.session_state.selected_date else dropdown_val
+    col_y, col_m, col_d, col_t = st.columns(4)
 
-    if final_date != st.session_state.selected_date:
-        st.session_state.selected_date = final_date
+    with col_y:
+        years = sorted(available_dates.year.unique(), reverse=True)
+        sel_y = st.selectbox("Year", options=years, index=years.index(curr_date.year))
+
+    with col_m:
+        months = sorted(available_dates[available_dates.year == sel_y].month.unique())
+        # 선택한 연도에 현재 월이 없을 경우를 대비한 처리
+        default_m_idx = months.index(curr_date.month) if curr_date.month in months else 0
+        sel_m = st.selectbox("Month", options=months, index=default_m_idx)
+
+    with col_d:
+        days = sorted(available_dates[(available_dates.year == sel_y) & (available_dates.month == sel_m)].day.unique())
+        default_d_idx = days.index(curr_date.day) if curr_date.day in days else 0
+        sel_d = st.selectbox("Day", options=days, index=default_d_idx)
+
+    with col_t:
+        times = sorted(available_dates[(available_dates.year == sel_y) & (available_dates.month == sel_m) & (
+                    available_dates.day == sel_d)])
+        # 시/분/초까지 있는 경우를 대비해 문자열 포맷팅
+        time_options = [t.strftime("%H:%M") for t in times]
+        curr_time_str = curr_date.strftime("%H:%M")
+        default_t_idx = time_options.index(curr_time_str) if curr_time_str in time_options else 0
+        sel_t_str = st.selectbox("Time", options=time_options, index=default_t_idx)
+
+        # 최종 선택된 날짜 객체 생성
+        dropdown_date = times[time_options.index(sel_t_str)]
+
+    # 3. 슬라이더와 드롭다운 동기화
+    # 드롭다운에서 변경이 일어나면 세션 상태 업데이트
+    if dropdown_date != st.session_state.selected_date:
+        st.session_state.selected_date = dropdown_date
         st.rerun()
 
-    # 기준 인덱스 고정
-    date_idx = dates.get_indexer([st.session_state.selected_date], method="nearest")[0]
-    actual_date = dates[date_idx]
+    # 4. 시각적 보조를 위한 슬라이더 (모바일에서는 대략적인 이동 용도)
+    selected_date = st.select_slider(
+        "📊 슬라이더로 빠르게 이동",
+        options=list(available_dates),
+        value=st.session_state.selected_date,
+        format_func=lambda x: x.strftime('%Y-%m-%d')
+    )
+
+    # 슬라이더 조작 시 세션 상태 업데이트
+    if selected_date != st.session_state.selected_date:
+        st.session_state.selected_date = selected_date
+        st.rerun()
+
+    actual_date = st.session_state.selected_date
+    date_idx = data.index.get_indexer([actual_date], method="nearest")[0]
+
+    st.info(f"📍 현재 분석 시점: **{actual_date.strftime('%Y-%m-%d %H:%M')}**")
 
     # =========================
-    # 📊 2. Selected Date Analysis (보정된 환율 로직 반영)
+    # 📊 지수별 정리표
     # =========================
+    st.markdown("### 📊 지수별 정리표")
 
-    st.markdown("---")
-    st.markdown(f"### 📊 지수별 정리표 ({actual_date.strftime('%Y-%m-%d %H:%M')})")
-
-    # [수정 포인트] 선택한 날짜의 실제 환율 추출
+    # 1. 환율 및 기초 데이터 계산
     current_fx = float(data.loc[actual_date, "USDKRW"])
+    usd_vals = chart_data.iloc[date_idx].copy()
+    krw_vals = usd_vals.copy()
 
-    # 데이터 복사 (차트용으로 쓰인 data_krw가 아닌 순수 USD 데이터 기준)
-    usd_values = chart_data.iloc[date_idx].copy()
-    growth_values = growth.iloc[date_idx].copy()
-
-    # KRW 값 계산 (선택된 날짜의 환율 current_fx를 곱함)
-    krw_values = usd_values.copy()
+    # 2. 통화 환산 (USD 자산 -> KRW, KRW 자산 -> USD)
     for col in usd_assets:
-        krw_values[col] = usd_values[col] * current_fx
-
-    # 한국 지수 처리 (한국 지수는 이미 KRW이므로 USD를 역산)
+        krw_vals[col] = usd_vals[col] * current_fx
     for col in ["KOSPI", "KOSDAQ"]:
-        if col in krw_values.index:
-            usd_values[col] = krw_values[col] / current_fx
+        usd_vals[col] = krw_vals[col] / current_fx
 
-    # 데이터프레임 생성
+    # 3. 데이터프레임 생성 및 '원하는 순서'로 정렬
+    # 요청하신 순서 리스트 (데이터프레임의 인덱스명과 일치해야 함)
+    custom_order = [
+        "Dow Jones", "NASDAQ", "S&P500", "Gold",
+        "Bitcoin", "WTI", "Natural Gas", "KOSPI", "KOSDAQ"
+    ]
+
     df_view = pd.DataFrame({
-        "성장률 (%)": growth_values,
-        "USD 값": usd_values,
-        "KRW 값": krw_values
+        "성장률 (%)": growth.iloc[date_idx],
+        "USD 값": usd_vals,
+        "KRW 값": krw_vals
     })
 
-    # ✅ [추가된 부분] 중복되는 기존 USDKRW 행 삭제
-    if "USDKRW" in df_view.index:
-        df_view = df_view.drop("USDKRW")
+    # USDKRW를 제외하고 위에서 정의한 순서대로 재배치
+    df_ordered = df_view.reindex(custom_order)
 
-    # 환율 행 추가 (가독성이 좋은 이름으로 새로 추가)
+    # 4. 환율(USDKRW) 행 생성 및 결합
     exchange_row = pd.DataFrame({
-        "성장률 (%)": [0.00],
-        "USD 값": [1.00],
+        "성장률 (%)": [0.0],  # 환율 자체의 성장률이 필요하다면 growth['USDKRW']를 넣을 수 있습니다.
+        "USD 값": [1.0],
         "KRW 값": [current_fx]
     }, index=["USDKRW (환율)"])
 
-    df_view = pd.concat([df_view, exchange_row])
+    final_df = pd.concat([df_ordered, exchange_row])
 
-    st.dataframe(df_view.style.format({
-        "성장률 (%)": "{:.2f}",
-        "USD 값": "{:,.2f}",
-        "KRW 값": "{:,.2f}" if current_fx < 100 else "{:,.0f}"
-    }), use_container_width=True)
-
-
-    # =========================
-    # 🧠 3. AI 분석 엔진 (속도 최적화)
-    # =========================
+    # 5. 출력 (소수점 2자리 포맷팅)
+    st.dataframe(final_df.style.format("{:,.2f}"), use_container_width=True)
+# =========================
+# 🧠 3. AI 분석 엔진 (속도 최적화)
+# =========================
     def analyze_trend_fast(ticker_name, df, target_idx):
         # 분석에 필요한 최소한의 윈도우만 가져옴 (최대 120일)
         start_pos = max(0, target_idx - 120)
@@ -785,7 +677,6 @@ with summary_col4:
     # row_growth 기반 최저 자산 (에러 지점 해결)
     worst_asset = row_growth.idxmin()
     st.metric("Worst Asset", worst_asset, delta=f"{row_growth[worst_asset]:.2f}%", delta_color="inverse")
-
 # =========================
 # 📰 5. 뉴스 분석 (링크 포함)
 # =========================
@@ -812,13 +703,6 @@ for i, keyword in enumerate(keywords):
         except Exception as e:
             st.caption(f"뉴스 로드 실패")
         st.markdown("---")
-
-import requests
-import feedparser
-import streamlit as st
-from urllib.parse import quote
-import re
-import html  # 특수 문자 변환(&quot; 등)을 위해 추가
 
 # =========================
 # 🛠 뉴스 데이터 정제 및 번역 함수
@@ -926,11 +810,5 @@ for i, (kr_name, en_keyword) in enumerate(global_keywords.items()):
 # =========================
 # 🔚 Footer
 # =========================
-st.markdown("---")
-# actual_date 변수가 없을 경우 오늘 날짜 표시
-footer_date = actual_date.strftime('%Y-%m-%d') if 'actual_date' in locals() else "N/A"
-st.markdown(f"""
-<div style='text-align: center; color: gray; font-size: 12px;'>
-    🚀 Enhanced Financial Dashboard v2.0 | 분석 기준일: {footer_date}
-</div>
-""", unsafe_allow_html=True)
+st.markdown(f"<div style='text-align: center; color: gray; margin-top: 50px;'>🚀 v2.1 Optimized Dashboard | {actual_date.strftime('%Y-%m-%d')}</div>", unsafe_allow_html=True)
+
