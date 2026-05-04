@@ -628,7 +628,7 @@ if not macro_growth.empty:
         col_left, col_right = st.columns([1.1, 0.9])
 
         with col_left:
-            st.write("### 🗺️ 섹터 도미넌스")
+            st.write("### 🗺️ 섹터 히트맨(도미넌스 차트)")
 
             # 날짜별 고유 키 생성 (클릭 트리거 보장)
             tm_key = f"tm_widget_{actual_valid_date.strftime('%Y%m%d')}"
