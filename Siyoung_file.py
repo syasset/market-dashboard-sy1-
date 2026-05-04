@@ -180,7 +180,7 @@ if not growth.empty:
         template="plotly_dark",
         dragmode="pan",
         height=650,
-        margin=dict(l=90, r=90, t=80, b=50),
+        margin=dict(l=20, r=20, t=80, b=50),#(l=90, r=90, t=80, b=50),
         showlegend=True,
         legend=dict(
             orientation="h",
@@ -268,7 +268,7 @@ if not macro_growth.empty:
         template="plotly_dark",
         dragmode="pan",
         height=600,  # 태그 가독성을 위해 높이 확보
-        margin=dict(l=90, r=90, t=80, b=50),
+        margin=dict(l=20, r=20, t=80, b=50),
         showlegend=True,
         legend=dict(
             orientation="h",
