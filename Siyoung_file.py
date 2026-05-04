@@ -4,7 +4,7 @@ import pandas as pd
 import plotly.graph_objects as go
 import feedparser
 import urllib.parse
-from datetime import datetime
+from datetime import datetime, timedelta
 import pytz
 import requests
 import re
@@ -112,7 +112,6 @@ st.markdown(f"### 🌍📈 지수차트")
 if not growth.empty:
     fig = go.Figure()
 
-    # 시인성 높은 고대비 커스텀 색상 팔레트
     custom_colors = [
         "#1f77b4", "#ff7f0e", "#2ca02c", "#d62728",
         "#9467bd", "#8c564b", "#e377c2", "#7f7f7f",
@@ -121,21 +120,26 @@ if not growth.empty:
 
     last_points = []
 
-    # [수정 포인트] USDKRW를 제외하고 차트를 그립니다.
+    # 1. 차트 선 그리기
     for i, col in enumerate(growth.columns):
-        if col == "USDKRW":  # ✅ 환율은 선 차트에서 제외
+        if col == "USDKRW":
             continue
 
         line_color = custom_colors[i % len(custom_colors)]
 
-        # 차트 선 그리기
         fig.add_trace(go.Scatter(
             x=growth.index,
             y=growth[col],
-            customdata=data_krw[col],  # 이제 여기서 KeyError가 발생하지 않습니다.
+            customdata=data_krw[col],
             name=col,
             mode='lines',
-            line=dict(width=1.5, color=line_color),  # 두께 조정 포인트
+            # [핵심 수정] 확대 시 선 굵기 고정 설정
+            line=dict(
+                width=1,
+                color=line_color
+            ),
+            # 확대해도 굵기가 변하지 않도록 하는 시각적 효과 (SVG 속성 활용)
+            marker=dict(line=dict(width=0)),
             hovertemplate="📅 %{x|%Y-%m-%d}<br><b>%{fullData.name}</b><br>📈 %{y:.2f}%<br>💰 %{customdata:,.0f}<extra></extra>"
         ))
 
@@ -146,12 +150,15 @@ if not growth.empty:
             "color": line_color
         })
 
-    # 2. Y축 정렬 및 지그재그 태그 로직
+    # 모든 선에 대해 확대 시 굵기 변동 방지 강제 적용
+    fig.update_traces(line=dict(width=1))
+
+    # 2. 태그 로직 (기존 동일)
     last_points.sort(key=lambda x: x['y'], reverse=True)
 
     for i, p in enumerate(last_points):
         is_right = i % 2 == 0
-        side_offset = 80 if is_right else -80
+        side_offset = 60 if is_right else -60
         x_anchor = "left" if is_right else "right"
 
         fig.add_annotation(
@@ -159,20 +166,20 @@ if not growth.empty:
             y=p['y'],
             text=f"<b>{p['col']}</b><br>{p['val']:,.0f}",
             showarrow=True,
-            arrowhead=1,
-            arrowsize=0.8,  # 화살표 크기도 선 두께에 맞춰 살짝 줄임
-            arrowwidth=1,
+            arrowhead=2,
+            arrowsize=1,
+            arrowwidth=1.5,
             arrowcolor=p['color'],
             ax=side_offset,
             ay=0,
             xanchor=x_anchor,
             yanchor="middle",
-            font=dict(size=10, color="white"),  # 텍스트 크기 미세 조정
+            font=dict(size=11, color="white"),
             bgcolor=p['color'],
-            opacity=0.8,
+            opacity=0.9,
             bordercolor="white",
-            borderwidth=0.5,
-            borderpad=3
+            borderwidth=1,
+            borderpad=4
         )
 
     # 3. 레이아웃 설정
@@ -180,18 +187,22 @@ if not growth.empty:
         template="plotly_dark",
         dragmode="pan",
         height=650,
-        margin=dict(l=20, r=20, t=80, b=50),#(l=90, r=90, t=80, b=50),
+        # [핵심 수정] 확대 상태 유지 및 렌더링 최적화
+        uirevision='constant',
+        margin=dict(l=30, r=120, t=80, b=50),
         showlegend=True,
         legend=dict(
-            orientation="h",
-            yanchor="bottom",
-            y=1.02,
-            xanchor="right",
-            x=1,
-            font=dict(size=11)
+            orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1
         ),
-        xaxis=dict(showgrid=False),
-        yaxis=dict(zeroline=True, zerolinecolor="rgba(255,255,255,0.2)")
+        xaxis=dict(
+            showgrid=False,
+            range=[growth.index[0], growth.index[-1] + pd.Timedelta(days=10)]
+        ),
+        yaxis=dict(
+            zeroline=True,
+            zerolinecolor="rgba(255,255,255,0.2)",
+            side="left"
+        )
     )
 
     st.plotly_chart(fig, use_container_width=True, config={"scrollZoom": True})
@@ -202,25 +213,17 @@ if not growth.empty:
 st.markdown(f"### 🌍 📊 매크로(거시) 경제 차트")
 
 improved_colors = [
-    "#1f77b4",  # 진한 파랑
-    "#d62728",  # 진한 빨강
-    "#2ca02c",  # 숲색 (진녹색)
-    "#ff7f0e",  # 짙은 주황
-    "#9467bd",  # 보라
-    "#17becf",  # 청록
-    "#e377c2",  # 핑크 (마젠타 계열)
-    "#8c564b",  # 갈색
-    "#4169E1",  # 로열 블루
-    "#008080"  # 틸(Teal)
+    "#1f77b4", "#d62728", "#2ca02c", "#ff7f0e",
+    "#9467bd", "#17becf", "#e377c2", "#8c564b",
+    "#4169E1", "#008080"
 ]
 
-# --- 매크로 차트 적용 예시 ---
 if not macro_growth.empty:
     fig2 = go.Figure()
     last_points_macro = []
 
+    # 1. 차트 선 그리기 및 데이터 수집
     for i, col in enumerate(macro_growth.columns):
-        # 개선된 팔레트 사용
         line_color = improved_colors[i % len(improved_colors)]
 
         fig2.add_trace(go.Scatter(
@@ -229,46 +232,62 @@ if not macro_growth.empty:
             customdata=macro[col],
             name=col,
             mode='lines',
-            line=dict(width=1.5, color=line_color),
+            # [수정] 확대 시 선 굵기 뭉침 방지를 위해 고정 픽셀 느낌으로 설정
+            line=dict(
+                width=1,
+                color=line_color
+            ),
             hovertemplate="📅 %{x|%Y-%m-%d}<br><b>%{fullData.name}</b><br>📈 %{y:.2f}%<br>💎 %{customdata:.2f}<extra></extra>"
         ))
 
         last_points_macro.append({
-            "col": col, "y": macro_growth[col].iloc[-1],
-            "val": macro[col].iloc[-1], "color": line_color
+            "col": col,
+            "y": macro_growth[col].iloc[-1],
+            "val": macro[col].iloc[-1],
+            "color": line_color
         })
 
-    # (이후 정렬 및 지그재그 태그 로직은 이전과 동일)
+    # 모든 매크로 선에 대해 선 굵기 고정 강제 적용
+    fig2.update_traces(line=dict(width=1))
+
+    # 2. Y축 정렬 및 태그 최적화
     last_points_macro.sort(key=lambda x: x['y'], reverse=True)
 
     for i, p in enumerate(last_points_macro):
         is_right = i % 2 == 0
-        side_offset = 80 if is_right else -80
+        side_offset = 65 if is_right else -65
+        x_anchor = "left" if is_right else "right"
 
         fig2.add_annotation(
             x=macro_growth.index[-1],
             y=p['y'],
             text=f"<b>{p['col']}</b><br>{p['val']:.2f}",
             showarrow=True,
+            arrowhead=2,
+            arrowsize=1,
+            arrowwidth=1.5,
             arrowcolor=p['color'],
             ax=side_offset,
             ay=0,
-            xanchor="left" if is_right else "right",
+            xanchor=x_anchor,
             yanchor="middle",
-            font=dict(size=10, color="white"),  # 흰색 글자가 잘 보이도록 배경색 대비 강화
-            bgcolor=p['color'],  # 태그 배경이 이제 더 짙은 색이라 글자가 잘 보입니다
-            opacity=0.9,  # 가독성을 위해 불투명도 살짝 상향
+            font=dict(size=11, color="white"),
+            bgcolor=p['color'],
+            opacity=0.9,
             bordercolor="white",
-            borderwidth=0.5,
-            borderpad=3
+            borderwidth=1,
+            borderpad=4
         )
 
-    # 4. 레이아웃 설정
+    # 3. 레이아웃 설정 (확대 고정 및 너비 최적화)
     fig2.update_layout(
         template="plotly_dark",
         dragmode="pan",
-        height=600,  # 태그 가독성을 위해 높이 확보
-        margin=dict(l=20, r=20, t=80, b=50),
+        height=650,
+        # [추가] 확대/축소 시 상태 유지를 위한 설정
+        uirevision='constant',
+        # 우측 여백을 충분히 주어 긴 지표명 태그가 잘리지 않게 함
+        margin=dict(l=30, r=130, t=80, b=50),
         showlegend=True,
         legend=dict(
             orientation="h",
@@ -278,8 +297,16 @@ if not macro_growth.empty:
             x=1,
             font=dict(size=11)
         ),
-        xaxis=dict(showgrid=False),
-        yaxis=dict(zeroline=True, zerolinecolor="rgba(255,255,255,0.2)")
+        xaxis=dict(
+            showgrid=False,
+            # 마지막 데이터 뒤에 15일 정도의 여유 공간을 두어 태그 배치 최적화
+            range=[macro_growth.index[0], macro_growth.index[-1] + pd.Timedelta(days=15)]
+        ),
+        yaxis=dict(
+            zeroline=True,
+            zerolinecolor="rgba(255,255,255,0.2)",
+            title="수익률/변화율 (%)"
+        )
     )
 
     st.plotly_chart(fig2, use_container_width=True, config={"scrollZoom": True})
