@@ -627,10 +627,12 @@ if not macro_growth.empty:
     # =========================
     # 📊 지수별 정리표
     # =========================
-    st.markdown("### 📊 지수별 정리표")
+    import streamlit as st
+
+    st.markdown("### 📈 시장 지수 실시간 대시보드")
 
     if date_idx > 0:
-        # 1. 데이터 추출 및 환산 (기존 로직 유지)
+        # 1. 데이터 추출 및 환산 로직 (기존 유지)
         curr_usd = chart_data.iloc[date_idx].copy()
         prev_usd = chart_data.iloc[date_idx - 1].copy()
         curr_krw = curr_usd.copy()
@@ -645,72 +647,52 @@ if not macro_growth.empty:
                 curr_usd[col] = curr_krw[col] / current_fx
                 prev_usd[col] = prev_krw[col] / current_fx
 
-        # 2. 증감량 및 증감률 계산 (KRW 기준)
+        # 2. 증감 계산
         diff_amt = curr_krw - prev_krw
         diff_pct = (diff_amt / prev_krw) * 100
 
-        # 3. 데이터프레임 구성
-        custom_order = ["Dow Jones", "NASDAQ", "S&P500", "Gold", "Bitcoin", "WTI", "Natural Gas", "KOSPI", "KOSDAQ"]
-        df_view = pd.DataFrame({
-            "성장률 (%)": growth.iloc[date_idx],
-            "USD 값": curr_usd,
-            "KRW 값": curr_krw,
-            "증감량 (KRW)": diff_amt,
-            "증감률 (%)": diff_pct
-        })
-        df_ordered = df_view.reindex(custom_order)
+        # 3. 카드 레이아웃 설정 (3열 구성)
+        display_order = [
+            ("🇺🇸 Dow Jones", "Dow Jones"), ("🇺🇸 NASDAQ", "NASDAQ"), ("🇺🇸 S&P500", "S&P500"),
+            ("🥇 Gold", "Gold"), ("₿ Bitcoin", "Bitcoin"), ("🛢️ WTI Oil", "WTI"),
+            ("🔥 Natural Gas", "Natural Gas"), ("🇰🇷 KOSPI", "KOSPI"), ("🇰🇷 KOSDAQ", "KOSDAQ")
+        ]
 
-        # 환율 행 추가
+        rows = [display_order[i:i + 3] for i in range(0, len(display_order), 3)]
+
+        for row in rows:
+            cols = st.columns(3)
+            for i, (label, key) in enumerate(row):
+                with cols[i]:
+                    with st.container(border=True):
+                        # 지수 이름
+                        st.caption(label)
+
+                        # 메인 수치 (KRW)
+                        val_krw = curr_krw[key]
+                        st.subheader(f"{val_krw:,.0f} ₩")
+
+                        # 서브 수치 (USD) - 작은 회색 글씨로 표기
+                        val_usd = curr_usd[key]
+                        st.markdown(
+                            f"<p style='color: gray; font-size: 0.85rem; margin-top: -15px;'>($ {val_usd:,.2f})</p>",
+                            unsafe_allow_html=True)
+
+                        # 변동폭 (st.metric 활용)
+                        pct_change = diff_pct[key]
+                        st.metric(label="전일대비", value=f"{diff_amt[key]:+,.0f} ₩", delta=f"{pct_change:+.2f}%")
+
+        # 4. 하단 환율 정보
+        st.divider()
         prev_fx = float(data.loc[available_dates[date_idx - 1], "USDKRW"])
-        exchange_row = pd.DataFrame({
-            "성장률 (%)": [0.0],
-            "USD 값": [1.0],
-            "KRW 값": [current_fx],
-            "증감량 (KRW)": [current_fx - prev_fx],
-            "증감률 (%)": [((current_fx / prev_fx) - 1) * 100]
-        }, index=["USDKRW (환율)"])
+        fx_diff = current_fx - prev_fx
+        fx_pct = (fx_diff / prev_fx) * 100
 
-        final_df = pd.concat([df_ordered, exchange_row])
-
-
-        # --- [디자인 및 스타일 섹션] ---
-
-        # 4-1. 색상 스타일 함수 (빨간색/파란색 배경)
-        def style_diff(val):
-            if val > 0:
-                return 'color: #D32F2F; background-color: #FFEBEE; font-weight: bold;'  # 상승: 빨간색
-            elif val < 0:
-                return 'color: #1976D2; background-color: #E3F2FD; font-weight: bold;'  # 하락: 파란색
-            return 'color: gray;'
-
-
-        # 4-2. 화살표 포맷팅 함수
-        def format_arrow_pct(val):
-            if val > 0:
-                return f"▲ {val:+.2f}%"
-            elif val < 0:
-                return f"▼ {val:+.2f}%"
-            return f"{val:.2f}%"
-
-
-        def format_arrow_amt(val):
-            if val > 0:
-                return f"▲ {val:+,.0f}"
-            elif val < 0:
-                return f"▼ {val:+,.0f}"
-            return f"{val:,.0f}"
-
-
-        # 5. 스타일 적용 (applymap 대신 map 사용)
-        styled_df = final_df.style.format({
-            "성장률 (%)": "{:.2f}%",
-            "USD 값": "{:,.2f}",
-            "KRW 값": "{:,.0f}",
-            "증감량 (KRW)": format_arrow_amt,
-            "증감률 (%)": format_arrow_pct
-        }).map(style_diff, subset=["증감량 (KRW)", "증감률 (%)"])  # 여기서 map으로 수정되었습니다!
-
-        st.dataframe(styled_df, use_container_width=True, height=420)
+        with st.expander("💱 실시간 환율 정보 (USDKRW)", expanded=True):
+            c1, c2, c3 = st.columns(3)
+            c1.metric("현재 환율", f"{current_fx:,.2f} ₩")
+            c2.metric("변동량", f"{fx_diff:+,.2f} ₩")
+            c3.metric("변동률", f"{fx_pct:+.2f}%")
 
     else:
         st.warning("첫 번째 데이터 날짜이므로 전일 대비 증감 분석이 불가능합니다.")
