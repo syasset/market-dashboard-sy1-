@@ -7,12 +7,110 @@ import feedparser
 import urllib.parse
 from datetime import datetime, timedelta
 import pytz
-import requests
 import re
 import html
 from urllib.parse import quote
 
 st.set_page_config(layout="wide", page_title="AI Financial Dashboard")
+
+# 1. 테마주 검색 및 리스트 업데이트 함수 (가상 로직)
+import requests
+from bs4 import BeautifulSoup
+import time    # 대기 시간용
+import random
+
+
+@st.cache_data(ttl=3600)
+def get_political_list(keyword):
+    """네이버 차단 시 2026 지방선거 국면 핵심 종목을 즉시 반환"""
+    fallback = {
+        "더불어민주당": {
+            "tickers": ["033530.KQ", "004710.KS", "004690.KS", "035150.KS", "024060.KQ"],
+            "names": ["에이텍", "한창제지", "태림포장", "신성이엔지", "경동인베스트"]
+        },
+        "국민의힘": {
+            "tickers": ["010660.KS", "023530.KQ", "002410.KS", "032350.KS", "005250.KS"],
+            "names": ["진양산업", "제주반도체", "범양건영", "우신시스템", "녹십자홀딩스"]
+        }
+    }
+
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'}
+    try:
+        url = f"https://search.naver.com/search.naver?where=nexearch&query={keyword}+관련주"
+        res = requests.get(url, headers=headers, timeout=5)
+        soup = BeautifulSoup(res.text, 'html.parser')
+
+        tickers, names = [], []
+        items = soup.select(".list_stock_item") or soup.select(".n_item")
+
+        for item in items[:5]:
+            n = item.select_one(".name").text if item.select_one(".name") else ""
+            c = re.search(r'\d{6}', str(item))
+            if n and c:
+                tickers.append(f"{c.group()}.KS")
+                names.append(n)
+
+        if not tickers: raise Exception("Blocked or No Data")
+        return {"tickers": tickers, "names": names}
+    except:
+        # 차단 시 사전에 정의된 2026년 대장주 리스트 사용
+        return fallback[keyword]
+
+
+# --- 2. 대시보드 메인 설정 ---
+st.set_page_config(layout="wide", page_title="2026 Politics Dashboard")
+st.title("🗳️ 2026 정치 테마주 실시간 모니터링 (좌우 비교)")
+st.caption("💡 국내 증시 휴장일 - 마지막 거래일 종가 기준으로 표시됩니다.")
+st.divider()
+
+# 데이터 준비
+blue_stocks = get_political_list("더불어민주당")
+red_stocks = get_political_list("국민의힘")
+
+# --- 3. [한눈에 보기] 좌우 레이아웃 ---
+col_blue, col_red = st.columns(2)
+
+# [왼쪽: 더불어민주당 - 파란색 테마]
+with col_blue:
+    st.markdown("<h3 style='color: #004ea2;'>🔵 더불어민주당 테마주</h3>", unsafe_allow_html=True)
+    st.markdown("<div style='background-color: #004ea2; height: 3px; margin-bottom: 20px;'></div>",
+                unsafe_allow_html=True)
+
+    for t, n in zip(blue_stocks["tickers"], blue_stocks["names"]):
+        try:
+            tk = yf.Ticker(t)
+            # 휴장일 대응을 위해 넉넉한 10일치 데이터 사용
+            hist = tk.history(period="10d")
+            if hist.empty: hist = yf.Ticker(t.replace(".KS", ".KQ")).history(period="10d")
+
+            data = hist['Close'].dropna()
+            if len(data) >= 2:
+                curr, prev = data.iloc[-1], data.iloc[-2]
+                pct = ((curr - prev) / prev) * 100
+                st.metric(label=n, value=f"{curr:,.0f}원", delta=f"{pct:.2f}%")
+        except:
+            continue
+
+# [오른쪽: 국민의힘 - 빨간색 테마]
+with col_red:
+    st.markdown("<h3 style='color: #e61e2b;'>🔴 국민의힘 테마주</h3>", unsafe_allow_html=True)
+    st.markdown("<div style='background-color: #e61e2b; height: 3px; margin-bottom: 20px;'></div>",
+                unsafe_allow_html=True)
+
+    for t, n in zip(red_stocks["tickers"], red_stocks["names"]):
+        try:
+            tk = yf.Ticker(t)
+            hist = tk.history(period="10d")
+            if hist.empty: hist = yf.Ticker(t.replace(".KS", ".KQ")).history(period="10d")
+
+            data = hist['Close'].dropna()
+            if len(data) >= 2:
+                curr, prev = data.iloc[-1], data.iloc[-2]
+                pct = ((curr - prev) / prev) * 100
+                st.metric(label=n, value=f"{curr:,.0f}원", delta=f"{pct:.2f}%")
+        except:
+            continue
 
 # =========================
 # 📊 섹터 매핑 설정
@@ -531,44 +629,91 @@ if not macro_growth.empty:
     # =========================
     st.markdown("### 📊 지수별 정리표")
 
-    # 1. 환율 및 기초 데이터 계산
-    #current_fx = float(data.loc[actual_valid_date, "USDKRW"])
-    usd_vals = chart_data.iloc[date_idx].copy()
-    krw_vals = usd_vals.copy()
+    if date_idx > 0:
+        # 1. 데이터 추출 및 환산 (기존 로직 유지)
+        curr_usd = chart_data.iloc[date_idx].copy()
+        prev_usd = chart_data.iloc[date_idx - 1].copy()
+        curr_krw = curr_usd.copy()
+        prev_krw = prev_usd.copy()
 
-    # 2. 통화 환산 (USD 자산 -> KRW, KRW 자산 -> USD)
-    for col in usd_assets:
-        krw_vals[col] = usd_vals[col] * current_fx
-    for col in ["KOSPI", "KOSDAQ"]:
-        if col in krw_vals:
-            usd_vals[col] = krw_vals[col] / current_fx
+        for col in usd_assets:
+            curr_krw[col] = curr_usd[col] * current_fx
+            prev_krw[col] = prev_usd[col] * current_fx
 
-    # 3. 데이터프레임 생성 및 '원하는 순서'로 정렬
-    custom_order = [
-        "Dow Jones", "NASDAQ", "S&P500", "Gold",
-        "Bitcoin", "WTI", "Natural Gas", "KOSPI", "KOSDAQ"
-    ]
+        for col in ["KOSPI", "KOSDAQ"]:
+            if col in curr_krw:
+                curr_usd[col] = curr_krw[col] / current_fx
+                prev_usd[col] = prev_krw[col] / current_fx
 
-    df_view = pd.DataFrame({
-        "성장률 (%)": growth.iloc[date_idx],
-        "USD 값": usd_vals,
-        "KRW 값": krw_vals
-    })
+        # 2. 증감량 및 증감률 계산 (KRW 기준)
+        diff_amt = curr_krw - prev_krw
+        diff_pct = (diff_amt / prev_krw) * 100
 
-    # USDKRW를 제외하고 위에서 정의한 순서대로 재배치
-    df_ordered = df_view.reindex(custom_order)
+        # 3. 데이터프레임 구성
+        custom_order = ["Dow Jones", "NASDAQ", "S&P500", "Gold", "Bitcoin", "WTI", "Natural Gas", "KOSPI", "KOSDAQ"]
+        df_view = pd.DataFrame({
+            "성장률 (%)": growth.iloc[date_idx],
+            "USD 값": curr_usd,
+            "KRW 값": curr_krw,
+            "증감량 (KRW)": diff_amt,
+            "증감률 (%)": diff_pct
+        })
+        df_ordered = df_view.reindex(custom_order)
 
-    # 4. 환율(USDKRW) 행 생성 및 결합
-    exchange_row = pd.DataFrame({
-        "성장률 (%)": [0.0],
-        "USD 값": [1.0],
-        "KRW 값": [current_fx]
-    }, index=["USDKRW (환율)"])
+        # 환율 행 추가
+        prev_fx = float(data.loc[available_dates[date_idx - 1], "USDKRW"])
+        exchange_row = pd.DataFrame({
+            "성장률 (%)": [0.0],
+            "USD 값": [1.0],
+            "KRW 값": [current_fx],
+            "증감량 (KRW)": [current_fx - prev_fx],
+            "증감률 (%)": [((current_fx / prev_fx) - 1) * 100]
+        }, index=["USDKRW (환율)"])
 
-    final_df = pd.concat([df_ordered, exchange_row])
+        final_df = pd.concat([df_ordered, exchange_row])
 
-    # 5. 출력 (소수점 2자리 포맷팅)
-    st.dataframe(final_df.style.format("{:,.2f}"), use_container_width=True)
+
+        # --- [디자인 및 스타일 섹션] ---
+
+        # 4-1. 색상 스타일 함수 (빨간색/파란색 배경)
+        def style_diff(val):
+            if val > 0:
+                return 'color: #D32F2F; background-color: #FFEBEE; font-weight: bold;'  # 상승: 빨간색
+            elif val < 0:
+                return 'color: #1976D2; background-color: #E3F2FD; font-weight: bold;'  # 하락: 파란색
+            return 'color: gray;'
+
+
+        # 4-2. 화살표 포맷팅 함수
+        def format_arrow_pct(val):
+            if val > 0:
+                return f"▲ {val:+.2f}%"
+            elif val < 0:
+                return f"▼ {val:+.2f}%"
+            return f"{val:.2f}%"
+
+
+        def format_arrow_amt(val):
+            if val > 0:
+                return f"▲ {val:+,.0f}"
+            elif val < 0:
+                return f"▼ {val:+,.0f}"
+            return f"{val:,.0f}"
+
+
+        # 5. 스타일 적용 (applymap 대신 map 사용)
+        styled_df = final_df.style.format({
+            "성장률 (%)": "{:.2f}%",
+            "USD 값": "{:,.2f}",
+            "KRW 값": "{:,.0f}",
+            "증감량 (KRW)": format_arrow_amt,
+            "증감률 (%)": format_arrow_pct
+        }).map(style_diff, subset=["증감량 (KRW)", "증감률 (%)"])  # 여기서 map으로 수정되었습니다!
+
+        st.dataframe(styled_df, use_container_width=True, height=420)
+
+    else:
+        st.warning("첫 번째 데이터 날짜이므로 전일 대비 증감 분석이 불가능합니다.")
 
 # =========================
 # 🧠 3. AI 분석 엔진 (속도 최적화)
@@ -628,7 +773,7 @@ if not macro_growth.empty:
         col_left, col_right = st.columns([1.1, 0.9])
 
         with col_left:
-            st.write("### 🗺️ 섹터 히트맨(도미넌스 차트)")
+            st.write("### 🗺️ 섹터 도미넌스")
 
             # 날짜별 고유 키 생성 (클릭 트리거 보장)
             tm_key = f"tm_widget_{actual_valid_date.strftime('%Y%m%d')}"
