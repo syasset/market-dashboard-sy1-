@@ -20,97 +20,6 @@ import time    # 대기 시간용
 import random
 
 
-@st.cache_data(ttl=3600)
-def get_political_list(keyword):
-    """네이버 차단 시 2026 지방선거 국면 핵심 종목을 즉시 반환"""
-    fallback = {
-        "더불어민주당": {
-            "tickers": ["033530.KQ", "004710.KS", "004690.KS", "035150.KS", "024060.KQ"],
-            "names": ["에이텍", "한창제지", "태림포장", "신성이엔지", "경동인베스트"]
-        },
-        "국민의힘": {
-            "tickers": ["010660.KS", "023530.KQ", "002410.KS", "032350.KS", "005250.KS"],
-            "names": ["진양산업", "제주반도체", "범양건영", "우신시스템", "녹십자홀딩스"]
-        }
-    }
-
-    headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'}
-    try:
-        url = f"https://search.naver.com/search.naver?where=nexearch&query={keyword}+관련주"
-        res = requests.get(url, headers=headers, timeout=5)
-        soup = BeautifulSoup(res.text, 'html.parser')
-
-        tickers, names = [], []
-        items = soup.select(".list_stock_item") or soup.select(".n_item")
-
-        for item in items[:5]:
-            n = item.select_one(".name").text if item.select_one(".name") else ""
-            c = re.search(r'\d{6}', str(item))
-            if n and c:
-                tickers.append(f"{c.group()}.KS")
-                names.append(n)
-
-        if not tickers: raise Exception("Blocked or No Data")
-        return {"tickers": tickers, "names": names}
-    except:
-        # 차단 시 사전에 정의된 2026년 대장주 리스트 사용
-        return fallback[keyword]
-
-
-# --- 2. 대시보드 메인 설정 ---
-st.set_page_config(layout="wide", page_title="2026 Politics Dashboard")
-st.title("🗳️ 2026 정치 테마주 실시간 모니터링 (좌우 비교)")
-st.caption("💡 국내 증시 휴장일 - 마지막 거래일 종가 기준으로 표시됩니다.")
-st.divider()
-
-# 데이터 준비
-blue_stocks = get_political_list("더불어민주당")
-red_stocks = get_political_list("국민의힘")
-
-# --- 3. [한눈에 보기] 좌우 레이아웃 ---
-col_blue, col_red = st.columns(2)
-
-# [왼쪽: 더불어민주당 - 파란색 테마]
-with col_blue:
-    st.markdown("<h3 style='color: #004ea2;'>🔵 더불어민주당 테마주</h3>", unsafe_allow_html=True)
-    st.markdown("<div style='background-color: #004ea2; height: 3px; margin-bottom: 20px;'></div>",
-                unsafe_allow_html=True)
-
-    for t, n in zip(blue_stocks["tickers"], blue_stocks["names"]):
-        try:
-            tk = yf.Ticker(t)
-            # 휴장일 대응을 위해 넉넉한 10일치 데이터 사용
-            hist = tk.history(period="10d")
-            if hist.empty: hist = yf.Ticker(t.replace(".KS", ".KQ")).history(period="10d")
-
-            data = hist['Close'].dropna()
-            if len(data) >= 2:
-                curr, prev = data.iloc[-1], data.iloc[-2]
-                pct = ((curr - prev) / prev) * 100
-                st.metric(label=n, value=f"{curr:,.0f}원", delta=f"{pct:.2f}%")
-        except:
-            continue
-
-# [오른쪽: 국민의힘 - 빨간색 테마]
-with col_red:
-    st.markdown("<h3 style='color: #e61e2b;'>🔴 국민의힘 테마주</h3>", unsafe_allow_html=True)
-    st.markdown("<div style='background-color: #e61e2b; height: 3px; margin-bottom: 20px;'></div>",
-                unsafe_allow_html=True)
-
-    for t, n in zip(red_stocks["tickers"], red_stocks["names"]):
-        try:
-            tk = yf.Ticker(t)
-            hist = tk.history(period="10d")
-            if hist.empty: hist = yf.Ticker(t.replace(".KS", ".KQ")).history(period="10d")
-
-            data = hist['Close'].dropna()
-            if len(data) >= 2:
-                curr, prev = data.iloc[-1], data.iloc[-2]
-                pct = ((curr - prev) / prev) * 100
-                st.metric(label=n, value=f"{curr:,.0f}원", delta=f"{pct:.2f}%")
-        except:
-            continue
 
 # =========================
 # 📊 섹터 매핑 설정
@@ -163,7 +72,6 @@ tickers = {
 }
 
 usd_assets = ["Dow Jones", "Bitcoin", "NASDAQ", "S&P500", "Gold", "WTI", "Natural Gas"]
-
 
 # =========================
 # 📊 데이터 로드 및 처리함수
@@ -733,119 +641,119 @@ if not macro_growth.empty:
     # =========================================================
     # 📈 [보강] 도미넌스 & 실시간 상세 리포트
     # =========================================================
-    if 'sector_df' in locals() and not sector_df.empty:
-        s_idx = sector_df.index.get_indexer([actual_valid_date], method='pad')[0]
+    import plotly.express as px
 
-        dom_list = []
-        total_e = 0
-        for col in sector_df.columns:
-            hist = sector_df[col].iloc[max(0, s_idx - 5):s_idx + 1].dropna()
-            # 에너지(시장 영향력) 계산
-            e = (hist.std() * len(sector_map[col]["tickers"])) if len(hist) > 1 else 1.0
-            total_e += e
 
-            cv, pv = sector_df[col].iloc[s_idx], sector_df[col].iloc[max(0, s_idx - 1)]
-            chg = ((cv / pv) - 1) * 100 if pd.notnull(pv) and pv != 0 else 0
-            dom_list.append({"섹터": col, "에너지": e, "수익률": chg})
+    def render_v30_final_integrated():
+        # 1. 필수 데이터 존재 확인
+        if 'data_sector_krw' not in globals() or 'sector_df' not in globals():
+            st.error("데이터프레임 로드 실패")
+            return
 
-        df_dom = pd.DataFrame(dom_list)
-        # 시장 차지 비율 계산
-        df_dom["도미넌스(%)"] = (df_dom["에너지"] / total_e * 100).fillna(0)
+        df_krw = globals()['data_sector_krw']
+        df_sec = globals()['sector_df']
 
-        col_left, col_right = st.columns([1.1, 0.9])
+        # [설정] 기준일 고정 (2026-05-07)
+        target_date = pd.Timestamp("2026-05-07")
 
-        with col_left:
-            st.write("### 🗺️ 섹터 도미넌스")
+        # 2. 세션 상태 초기화 (v30)
+        if "v30_target" not in st.session_state:
+            st.session_state.v30_target = "반도체"
 
-            # 날짜별 고유 키 생성 (클릭 트리거 보장)
-            tm_key = f"tm_widget_{actual_valid_date.strftime('%Y%m%d')}"
+        # [콜백] 클릭 시 즉시 세션 업데이트
+        def sync_v30():
+            event = st.session_state.get("v30_chart_key")
+            if event and "selection" in event:
+                pts = event["selection"].get("points")
+                if pts: st.session_state.v30_target = str(pts[0].get("label"))
 
-            fig = px.treemap(df_dom, path=["섹터"], values="도미넌스(%)", color="수익률",
-                             color_continuous_scale="RdYlGn", range_color=[-2, 2])
-            fig.update_layout(height=450, margin=dict(t=0, l=0, r=0, b=0), template="plotly_dark")
+        try:
+            # 3. 트리맵 데이터 연산
+            _idx = df_sec.index.get_indexer([target_date], method='pad')[0]
+            _calc = []
+            for name in sector_map.keys():
+                if name not in df_sec.columns: continue
+                curr_val = df_sec[name].iloc[_idx]
+                prev_val = df_sec[name].iloc[_idx - 1] if _idx > 0 else curr_val
+                _calc.append({
+                    "섹터": str(name),
+                    "에너지": df_sec[name].iloc[max(0, _idx - 5):_idx + 1].std() or 1.0,
+                    "수익률": ((curr_val / prev_val) - 1) * 100
+                })
+            _df_map = pd.DataFrame(_calc)
+            _df_map["비중"] = (_df_map["에너지"] / _df_map["에너지"].sum() * 100).fillna(0)
 
-            # 트리맵 출력 및 선택 감지
-            selected = st.plotly_chart(fig, use_container_width=True, on_select="rerun", key=tm_key)
+            # 4. 레이아웃 (v27.0 디자인 복구)
+            col_l, col_r = st.columns([1.1, 0.9])
 
-            if selected and "selection" in selected and selected["selection"]["points"]:
-                new_label = selected["selection"]["points"][0].get("label")
-                if new_label and st.session_state.get("clicked_sector") != new_label:
-                    st.session_state.clicked_sector = new_label
-                    st.rerun()
-
-        with col_right:
-            # [검증] data_sector가 여기서 정상적으로 잡히는지 확인됨
-            last_data_date = data_sector.index[-1].date()
-            is_latest_day = (actual_valid_date.date() >= last_data_date)
-
-            target = st.session_state.get("clicked_sector")
-
-            # 5월 4일 등 최신일 안내 (상시 노출)
-            if is_latest_day:
-                st.subheader("📢 데이터 업데이트 안내")
-                st.warning("🔔 **현재 선택하신 날짜는 최신 데이터 업데이트 구간입니다.**")
-                st.info("📅 해외 시장 확정 종가는 다음 영업일 오전 08:00 이후 반영됩니다.")
-                st.markdown("---")
-
-            # 트리맵에서 클릭된 섹터가 있을 때 상세 정보 출력
-            if target:
-                st.subheader(f"🚀 {target} 상세 정보")
-
-                t_list = sector_map[target]["tickers"]
-                n_list = sector_map[target]["names"]
-                details = []
-
-                # raw_sector_data에서 Volume 데이터만 미리 추출 및 정리
-                try:
-                    volume_df = raw_sector_data["Volume"].ffill().fillna(0)
-                    # 만약 컬럼이 MultiIndex라면 레벨 정리
-                    if isinstance(volume_df.columns, pd.MultiIndex):
-                        volume_df.columns = volume_df.columns.get_level_values(0)
-                except:
-                    volume_df = pd.DataFrame()
-
-                for t, n in zip(t_list, n_list):
-                    try:
-                        # 1. 가격 데이터 추출 (data_sector_krw는 이미 원화 환산 및 정리가 끝난 상태임)
-                        if actual_valid_date in data_sector_krw.index:
-                            display_p = data_sector_krw.loc[actual_valid_date, t]
-                        else:
-                            display_p = data_sector_krw[t].dropna().iloc[-1]
-
-                        # 2. 거래량 데이터 추출 (volume_df에서 해당 티커 추출)
-                        if not volume_df.empty and t in volume_df.columns:
-                            if actual_valid_date in volume_df.index:
-                                v = volume_df.loc[actual_valid_date, t]
-                            else:
-                                v = volume_df[t].dropna().iloc[-1]
-                        else:
-                            v = 0
-
-                        # 3. 데이터 유효성 검사 (NaN 방지)
-                        display_p = 0 if pd.isna(display_p) else display_p
-                        v = 0 if pd.isna(v) else v
-
-                        if display_p > 0:
-                            # 거래대금 계산 (이미 display_p가 원화이므로 그대로 계산)
-                            m_val = (display_p * v) / 1_000_000
-
-                            details.append({
-                                "종목": n,
-                                "현재가": display_p,
-                                "거래대금(백만)": m_val,
-                                "거래량": v
-                            })
-                    except Exception as e:
-                        continue
-
-                if details:
-                    st.dataframe(
-                        pd.DataFrame(details).style.format({
-                            "현재가": "{:,.0f}",
-                            "거래대금(백만)": "{:,.1f}",
-                            "거래량": "{:,.0f}"
-                        }), use_container_width=True, hide_index=True
+            with col_l:
+                st.markdown(f"### 🗺️ 도미넌스 분석")
+                fig = px.treemap(
+                    _df_map, path=["섹터"], values="비중", color="수익률",
+                    color_continuous_scale=[[0, '#2ecc71'], [0.5, '#f1c40f'], [1, '#e74c3c']],
+                    range_color=[-2.0, 2.0]
+                )
+                fig.update_layout(
+                    margin=dict(t=10, l=0, r=0, b=10),
+                    coloraxis_colorbar=dict(
+                        orientation="h", y=-0.3, x=0.5, thickness=15,
+                        tickvals=[-1.7, 1.7], ticktext=["🟢 탐욕 (Greed)", "🔴 공포 (Fear)"]
                     )
+                )
+                st.plotly_chart(fig, use_container_width=True, on_select=sync_v30, key="v30_chart_key")
+                st.markdown("<center><b>⬅️ 탐욕 (Greed) &nbsp; | &nbsp; 공포 (Fear) ➡️</b></center>",
+                            unsafe_allow_html=True)
+
+            with col_r:
+                active = st.session_state.v30_target
+                st.markdown(f"### 🔍 {active} 상세 종목")
+
+                _details = []
+                if active in sector_map:
+                    for t, n in zip(sector_map[active]["tickers"], sector_map[active]["names"]):
+                        # 티커 보정 (문자열 6자리)
+                        tid = str(t).zfill(6) if str(t).isdigit() else t
+                        if tid not in df_krw.columns: continue
+
+                        # 해당 종목 데이터 (결측치 제거)
+                        s = df_krw[tid].dropna()
+
+                        if len(s) >= 2:
+                            # [강제 날짜 분리 로직]
+                            # 1. 오늘 가격 (데이터상 마지막 값)
+                            curr_p = s.iloc[-1]
+                            # 2. 어제 가격 (데이터상 마지막에서 두 번째 값)
+                            prev_p = s.iloc[-2]
+
+                            diff = curr_p - prev_p
+                            pct = (diff / prev_p) * 100 if prev_p != 0 else 0
+
+                            _details.append({
+                                "종목명": n,
+                                "현재가": curr_p,
+                                "전일대비": diff,
+                                "수익률(%)": pct
+                            })
+
+                if _details:
+                    detail_df = pd.DataFrame(_details)
+                    st.dataframe(
+                        detail_df.style.format({
+                            "현재가": "{:,.0f}원",
+                            "전일대비": "{:+,.0f}원",
+                            "수익률(%)": "{:+.2f}%"
+                        }).map(lambda v: f'color: {"#e74c3c" if v > 0 else "#3498db" if v < 0 else "white"}',
+                               subset=["전일대비", "수익률(%)"]),
+                        use_container_width=True, hide_index=True, height=450
+                    )
+                else:
+                    st.info("섹터를 클릭해 주세요.")
+
+        except Exception as e:
+            st.error(f"대시보드 오류: {e}")
+
+
+    render_v30_final_integrated()
 
     # =========================
     # 📈 4. AI 분석 리포트 & 기상도
