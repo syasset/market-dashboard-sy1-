@@ -1057,6 +1057,83 @@ for i, (kr_name, en_keyword) in enumerate(global_keywords.items()):
                     st.markdown(f"🔗 [기사 원문 읽기]({news['link']})")
         st.markdown("---")
 
+# 1. 대상 종목 및 증권사 코드 설정
+target_stocks = {
+    "삼성전자": "005930",
+    "현대차": "005380",
+    "LS": "006260"
+}
+
+def get_realtime_price(code):
+    """네이버 금융에서 실시간 현재가를 크롤링합니다."""
+    url = f"https://finance.naver.com/item/main.naver?code={code}"
+    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/110.0.0.0 Safari/537.36'}
+    
+    try:
+        res = requests.get(url, headers=headers)
+        soup = BeautifulSoup(res.text, 'html.parser')
+        
+        # 현재가 추출
+        price_tag = soup.select_one(".no_today .blind")
+        if not price_tag:
+            return None, None, None, None
+            
+        current_price = price_tag.text.replace(",", "")
+        
+        # 전일대비 및 등락률 추출
+        diff_tag = soup.select_one(".no_exday .blind")
+        rate_tag = soup.select_one(".no_exday .n_setso .blind") # 등락률 태그 위치는 사이트 구조에 따라 변동될 수 있음
+        
+        return int(current_price), diff_tag.text if diff_tag else "0", rate_tag.text if rate_tag else "0%"
+    except Exception as e:
+        return None, None, None
+
+# --- UI 레이아웃 ---
+st.set_page_config(page_title="실시간 국장 시세", layout="wide")
+st.title("🇰🇷 실시간 주요 종목 시세 추적기")
+st.markdown("네이버 금융 데이터를 30초마다 자동으로 크롤링하여 갱신합니다.")
+
+# 실시간 갱신을 위한 빈 공간 생성
+placeholder = st.empty()
+
+# 2. 무한 루프 (30초마다 실행)
+while True:
+    with placeholder.container():
+        now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        st.write(f"⏱️ **최종 갱신 시각:** {now}")
+        
+        # 메트릭 레이아웃 (3개 종목 나란히 배치)
+        cols = st.columns(len(target_stocks))
+        
+        for i, (name, code) in enumerate(target_stocks.items()):
+            price, diff, rate = get_realtime_price(code)
+            
+            if price:
+                # 등락에 따른 색상 및 기호 처리 (임시 로직)
+                cols[i].metric(
+                    label=f"{name} ({code})",
+                    value=f"{price:,.0f} 원",
+                    delta=f"{diff} ({rate})"
+                )
+            else:
+                cols[i].error(f"{name} 로드 실패")
+
+        # 시세 대조를 위한 테이블 형태 출력
+        st.markdown("---")
+        st.subheader("📊 데이터 검증 테이블")
+        
+        # 예시용 간단 테이블 데이터 생성
+        data_rows = []
+        for name, code in target_stocks.items():
+            price, _, _ = get_realtime_price(code)
+            data_rows.append({"종목명": name, "종목코드": code, "현재가": f"{price:,.0f}" if price else "N/A"})
+        
+        st.table(pd.DataFrame(data_rows))
+        
+    # 30초 대기
+    time.sleep(30)
+    st.rerun() # 스트림릿 앱 재실행
+    
 # =========================
 # 🔚 Footer
 # =========================
