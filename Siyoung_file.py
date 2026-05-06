@@ -644,116 +644,92 @@ if not macro_growth.empty:
     import plotly.express as px
 
 
-    def render_v30_final_integrated():
-        # 1. 필수 데이터 존재 확인
+    def render_v32_dynamic_date_trace():
         if 'data_sector_krw' not in globals() or 'sector_df' not in globals():
-            st.error("데이터프레임 로드 실패")
+            st.error("데이터 로드 상태를 확인하세요.")
             return
 
         df_krw = globals()['data_sector_krw']
         df_sec = globals()['sector_df']
 
-        # [설정] 기준일 고정 (2026-05-07)
-        target_date = pd.Timestamp("2026-05-07")
+        # [수정포인트] 기준일 자동화: 데이터프레임 인덱스의 가장 마지막 날짜를 가져옴
+        # 만약 오늘 데이터가 들어왔다면 오늘 날짜를, 안 들어왔다면 가장 최근 거래일 날짜를 반환함
+        v32_dt = df_sec.index[-1]
 
-        # 2. 세션 상태 초기화 (v30)
-        if "v30_target" not in st.session_state:
-            st.session_state.v30_target = "반도체"
+        if "v32_target" not in st.session_state:
+            st.session_state.v32_target = "반도체"
 
-        # [콜백] 클릭 시 즉시 세션 업데이트
-        def sync_v30():
-            event = st.session_state.get("v30_chart_key")
+        def sync_v32():
+            event = st.session_state.get("v32_chart")
             if event and "selection" in event:
                 pts = event["selection"].get("points")
-                if pts: st.session_state.v30_target = str(pts[0].get("label"))
+                if pts: st.session_state.v32_target = str(pts[0].get("label"))
 
         try:
-            # 3. 트리맵 데이터 연산
-            _idx = df_sec.index.get_indexer([target_date], method='pad')[0]
+            # 상단에 현재 분석 중인 기준일 표시
+            st.caption(f"📅 분석 데이터 기준일: {v32_dt.strftime('%Y-%m-%d')}")
+
+            # 1. 좌측 트리맵 연산
+            _idx = df_sec.index.get_indexer([v32_dt], method='pad')[0]
             _calc = []
             for name in sector_map.keys():
                 if name not in df_sec.columns: continue
-                curr_val = df_sec[name].iloc[_idx]
-                prev_val = df_sec[name].iloc[_idx - 1] if _idx > 0 else curr_val
-                _calc.append({
-                    "섹터": str(name),
-                    "에너지": df_sec[name].iloc[max(0, _idx - 5):_idx + 1].std() or 1.0,
-                    "수익률": ((curr_val / prev_val) - 1) * 100
-                })
-            _df_map = pd.DataFrame(_calc)
-            _df_map["비중"] = (_df_map["에너지"] / _df_map["에너지"].sum() * 100).fillna(0)
+                c_val = df_sec[name].iloc[_idx]
+                p_val = df_sec[name].iloc[_idx - 1] if _idx > 0 else c_val
+                _calc.append({"섹터": str(name), "에너지": df_sec[name].iloc[max(0, _idx - 5):_idx + 1].std() or 1.0,
+                              "수익률": ((c_val / p_val) - 1) * 100})
 
-            # 4. 레이아웃 (v27.0 디자인 복구)
             col_l, col_r = st.columns([1.1, 0.9])
 
             with col_l:
-                st.markdown(f"### 🗺️ 도미넌스 분석")
-                fig = px.treemap(
-                    _df_map, path=["섹터"], values="비중", color="수익률",
-                    color_continuous_scale=[[0, '#2ecc71'], [0.5, '#f1c40f'], [1, '#e74c3c']],
-                    range_color=[-2.0, 2.0]
-                )
-                fig.update_layout(
-                    margin=dict(t=10, l=0, r=0, b=10),
-                    coloraxis_colorbar=dict(
-                        orientation="h", y=-0.3, x=0.5, thickness=15,
-                        tickvals=[-1.7, 1.7], ticktext=["🟢 탐욕 (Greed)", "🔴 공포 (Fear)"]
-                    )
-                )
-                st.plotly_chart(fig, use_container_width=True, on_select=sync_v30, key="v30_chart_key")
-                st.markdown("<center><b>⬅️ 탐욕 (Greed) &nbsp; | &nbsp; 공포 (Fear) ➡️</b></center>",
-                            unsafe_allow_html=True)
+                st.markdown("### 🗺️ 도미넌스 분석")
+                fig = px.treemap(pd.DataFrame(_calc), path=["섹터"], values="에너지", color="수익률",
+                                 color_continuous_scale=[[0, '#2ecc71'], [0.5, '#f1c40f'], [1, '#e74c3c']],
+                                 range_color=[-2, 2])
+                fig.update_layout(margin=dict(t=10, l=0, r=0, b=10),
+                                  coloraxis_colorbar=dict(orientation="h", y=-0.3, x=0.5, thickness=15,
+                                                          tickvals=[-1.7, 1.7], ticktext=["🟢 탐욕", "🔴 공포"]))
+                st.plotly_chart(fig, use_container_width=True, on_select=sync_v32, key="v32_chart")
 
             with col_r:
-                active = st.session_state.v30_target
-                st.markdown(f"### 🔍 {active} 상세 종목")
+                active = st.session_state.v32_target
+                st.markdown(f"### 🔍 {active} 상세 정보")
 
                 _details = []
                 if active in sector_map:
                     for t, n in zip(sector_map[active]["tickers"], sector_map[active]["names"]):
-                        # 티커 보정 (문자열 6자리)
                         tid = str(t).zfill(6) if str(t).isdigit() else t
                         if tid not in df_krw.columns: continue
 
-                        # 해당 종목 데이터 (결측치 제거)
+                        # [성공했던 역추적 로직 유지]
                         s = df_krw[tid].dropna()
-
                         if len(s) >= 2:
-                            # [강제 날짜 분리 로직]
-                            # 1. 오늘 가격 (데이터상 마지막 값)
                             curr_p = s.iloc[-1]
-                            # 2. 어제 가격 (데이터상 마지막에서 두 번째 값)
-                            prev_p = s.iloc[-2]
+                            diff_prices = s[s != curr_p]
+                            if not diff_prices.empty:
+                                prev_p = diff_prices.iloc[-1]
+                            else:
+                                prev_p = curr_p
 
                             diff = curr_p - prev_p
                             pct = (diff / prev_p) * 100 if prev_p != 0 else 0
 
-                            _details.append({
-                                "종목명": n,
-                                "현재가": curr_p,
-                                "전일대비": diff,
-                                "수익률(%)": pct
-                            })
+                            _details.append({"종목명": n, "현재가": curr_p, "전일대비": diff, "수익률(%)": pct})
 
                 if _details:
-                    detail_df = pd.DataFrame(_details)
-                    st.dataframe(
-                        detail_df.style.format({
-                            "현재가": "{:,.0f}원",
-                            "전일대비": "{:+,.0f}원",
-                            "수익률(%)": "{:+.2f}%"
-                        }).map(lambda v: f'color: {"#e74c3c" if v > 0 else "#3498db" if v < 0 else "white"}',
-                               subset=["전일대비", "수익률(%)"]),
-                        use_container_width=True, hide_index=True, height=450
-                    )
+                    st.dataframe(pd.DataFrame(_details).style.format(
+                        {"현재가": "{:,.0f}원", "전일대비": "{:+,.0f}원", "수익률(%)": "{:+.2f}%"})
+                                 .map(lambda v: f'color: {"#e74c3c" if v > 0 else "#3498db" if v < 0 else "white"}',
+                                      subset=["전일대비", "수익률(%)"]),
+                                 use_container_width=True, hide_index=True, height=450)
                 else:
-                    st.info("섹터를 클릭해 주세요.")
+                    st.info("데이터가 없습니다.")
 
         except Exception as e:
-            st.error(f"대시보드 오류: {e}")
+            st.error(f"오류: {e}")
 
 
-    render_v30_final_integrated()
+    render_v32_dynamic_date_trace()
 
     # =========================
     # 📈 4. AI 분석 리포트 & 기상도
