@@ -1,3 +1,5 @@
+
+# =========================
 import streamlit as st
 import yfinance as yf
 import pandas as pd
@@ -20,8 +22,6 @@ import time    # 대기 시간용
 import random
 
 
-
-# =========================
 # 📊 섹터 매핑 설정
 # =========================
 SECTOR_MAP = {
@@ -80,7 +80,7 @@ usd_assets = ["Dow Jones", "Bitcoin", "NASDAQ", "S&P500", "Gold", "WTI", "Natura
 def load_all_data():
     # 지수 데이터
     raw_all = yf.download(list(tickers.values()), start="2018-01-01", progress=False, threads=False)
-    # 종가 데이터 추출 및 가공
+
     raw_close = raw_all["Close"].ffill().bfill()
     if isinstance(raw_close.columns, pd.MultiIndex): raw_close = raw_close.droplevel(0, axis=1)
     ticker_to_name = {v: k for k, v in tickers.items()}
