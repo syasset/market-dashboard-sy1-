@@ -1092,78 +1092,117 @@ target_stocks = {
     "LS": "006260"
 }
 
+#======= 점검용
+# 1. 대상 종목 설정 (삼성전자, 현대차, LS)
+TARGET_STOCKS = {
+    "삼성전자": "005930",
+    "현대차": "005380",
+    "LS": "006260"
+}
 
-def get_realtime_price(code):
-    """네이버 금융에서 실시간 현재가를 크롤링합니다."""
-    url = f"https://finance.naver.com/item/main.naver?code={code}"
+
+def get_naver_realtime_api(codes):
+    """
+    네이버 증권 실시간 폴링 API 호출 함수
+    로그인 없이 공용 브라우저 헤더를 사용하여 데이터를 가져옵니다.
+    """
+    code_list = ",".join(codes)
+    url = f"https://polling.finance.naver.com/api/realtime?query=SERVICE_ITEM:{code_list}"
+
+    # 브라우저인 것처럼 보이게 하는 헤더 (차단 방지)
     headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/110.0.0.0 Safari/537.36'}
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/116.0.0.0 Safari/537.36"
+    }
 
     try:
-        res = requests.get(url, headers=headers)
-        soup = BeautifulSoup(res.text, 'html.parser')
+        response = requests.get(url, headers=headers, timeout=5)
+        response.raise_for_status()
+        data = response.json()
 
-        # 현재가 추출
-        price_tag = soup.select_one(".no_today .blind")
-        if not price_tag:
-            return None, None, None, None
-
-        current_price = price_tag.text.replace(",", "")
-
-        # 전일대비 및 등락률 추출
-        diff_tag = soup.select_one(".no_exday .blind")
-        rate_tag = soup.select_one(".no_exday .n_setso .blind")  # 등락률 태그 위치는 사이트 구조에 따라 변동될 수 있음
-
-        return int(current_price), diff_tag.text if diff_tag else "0", rate_tag.text if rate_tag else "0%"
+        if data.get('result') and data['result'].get('areas'):
+            items = data['result']['areas']['datas']
+            results = {}
+            for item in items:
+                # API 필드 매핑: nv(현재가), cv(전일대비), cr(등락률), ov(시가), hv(고가), lv(저가), aq(거래량)
+                results[item['nm']] = {
+                    "현재가": item.get('nv', 0),
+                    "전일대비": item.get('cv', 0),
+                    "등락률": item.get('cr', 0.0),
+                    "시가": item.get('ov', 0),
+                    "고가": item.get('hv', 0),
+                    "저가": item.get('lv', 0),
+                    "거래량": item.get('aq', 0)
+                }
+            return results
+        return None
     except Exception as e:
-        return None, None, None
+        # 에러 발생 시 로그만 출력하고 None 반환
+        print(f"Error fetching data: {e}")
+        return None
 
 
-# --- UI 레이아웃 ---
-st.set_page_config(page_title="실시간 국장 시세", layout="wide")
-st.title("🇰🇷 실시간 주요 종목 시세 추적기")
-st.markdown("네이버 금융 데이터를 30초마다 자동으로 크롤링하여 갱신합니다.")
+# --- Streamlit UI 레이아웃 ---
+st.set_page_config(page_title="국장 실시간 시세 검증", layout="wide")
+st.title("🎯 국장 실시간 시세 & 데이터 검증 (30초 자동 갱신)")
 
-# 실시간 갱신을 위한 빈 공간 생성
+# 마지막으로 성공한 데이터를 세션에 저장 (API 실패 시 화면 유지용)
+if "last_data" not in st.session_state:
+    st.session_state.last_data = None
+
+# 실시간 갱신을 위한 빈 컨테이너
 placeholder = st.empty()
 
-# 2. 무한 루프 (30초마다 실행)
+# 실행 루프
 while True:
+    # API 데이터 호출
+    current_prices = get_naver_realtime_api(list(TARGET_STOCKS.values()))
+
+    # 데이터 수집 성공 여부에 따른 상태 처리
+    if current_prices:
+        st.session_state.last_data = current_prices
+        status_msg = "✅ 실시간 데이터 동기화 완료"
+        status_color = "green"
+    else:
+        status_msg = "⚠️ 서버 연결 지연 (직전 데이터 유지 중)"
+        status_color = "orange"
+
+    # 화면 렌더링
     with placeholder.container():
         now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-        st.write(f"⏱️ **최종 갱신 시각:** {now}")
+        st.markdown(f"**상태:** :{status_color}[{status_msg}] | **업데이트 시각:** {now}")
 
-        # 메트릭 레이아웃 (3개 종목 나란히 배치)
-        cols = st.columns(len(target_stocks))
+        if st.session_state.last_data:
+            display_dict = st.session_state.last_data
 
-        for i, (name, code) in enumerate(target_stocks.items()):
-            price, diff, rate = get_realtime_price(code)
+            # 1. 상단 메트릭 (주요 3종목)
+            cols = st.columns(len(TARGET_STOCKS))
+            for i, name in enumerate(TARGET_STOCKS.keys()):
+                info = display_dict.get(name)
+                if info:
+                    cols[i].metric(
+                        label=name,
+                        value=f"{info['현재가']:,} 원",
+                        delta=f"{info['전일대비']:,} ({info['등락률']}%)"
+                    )
 
-            if price:
-                # 등락에 따른 색상 및 기호 처리 (임시 로직)
-                cols[i].metric(
-                    label=f"{name} ({code})",
-                    value=f"{price:,.0f} 원",
-                    delta=f"{diff} ({rate})"
-                )
-            else:
-                cols[i].error(f"{name} 로드 실패")
+            # 2. 하단 데이터 검증 테이블 (시고저종)
+            st.markdown("---")
+            st.subheader("📊 시고저종 상세 데이터 검증")
 
-        # 시세 대조를 위한 테이블 형태 출력
-        st.markdown("---")
-        st.subheader("📊 데이터 검증 테이블")
+            # DataFrame 변환 및 포맷팅
+            v_df = pd.DataFrame(display_dict).T
+            v_df = v_df[["시가", "고가", "저가", "현재가", "거래량"]]
 
-        # 예시용 간단 테이블 데이터 생성
-        data_rows = []
-        for name, code in target_stocks.items():
-            price, _, _ = get_realtime_price(code)
-            data_rows.append({"종목명": name, "종목코드": code, "현재가": f"{price:,.0f}" if price else "N/A"})
+            # 테이블 출력
+            st.table(v_df.style.format("{:,}"))
 
-        st.table(pd.DataFrame(data_rows))
+            st.caption("※ 네이버 금융 API(polling.finance.naver.com)를 직접 호출하여 30초마다 갱신합니다.")
+        else:
+            st.error("데이터를 불러오는 데 실패했습니다. 장 중인지 확인하거나 잠시 후 다시 시도해 주세요.")
 
-    # 30초 대기
+    # 30초 대기 후 리런
     time.sleep(30)
-    st.rerun()  # 스트림릿 앱 재실행
+    st.rerun()
 
 # =========================
 # 🔚 Footer
