@@ -79,7 +79,7 @@ usd_assets = ["Dow Jones", "Bitcoin", "NASDAQ", "S&P500", "Gold", "WTI", "Natura
 @st.cache_data(ttl=600)
 def load_all_data():
     # 지수 데이터
-    raw_all = yf.download(list(tickers.values()), start="2018-01-01", progress=False)
+    raw_all = yf.download(list(tickers.values()), start="2018-01-01", progress=False, threads=False)
     # 종가 데이터 추출 및 가공
     raw_close = raw_all["Close"].ffill().bfill()
     if isinstance(raw_close.columns, pd.MultiIndex): raw_close = raw_close.droplevel(0, axis=1)
@@ -645,17 +645,24 @@ if not macro_growth.empty:
     import plotly.graph_objects as go
 
 
-    def render_v78_custom_color_sync():
-        # 1. 데이터 로드
+    def render_v81_verification_mode():
+        # 1. 데이터 로드 (기존 동일)
         df_sec = globals().get('sector_df')
         df_krw = globals().get('data_sector_krw')
         df_vol = globals().get('data_volume_indices')
+        # 검증을 위한 원본 시세 데이터 (Open, High, Low, Close가 포함된 dict 또는 DF라고 가정)
+        # 일반적으로 df_krw가 Close라면, 별도의 ohlc 데이터 소스가 필요할 수 있습니다.
+        # 여기서는 검증을 위해 df_krw 외에 ohlc 관련 전역 변수가 있다고 가정하거나
+        # 기존 데이터 구조 내에서 최대한 추출합니다.
+        df_open = globals().get('data_open_krw')
+        df_high = globals().get('data_high_krw')
+        df_low = globals().get('data_low_krw')
 
         if df_sec is None or df_krw is None:
             st.warning("데이터 로드 중입니다...")
             return
 
-        # 2. 날짜 및 세션 설정
+        # 2. 날짜 및 세션 설정 (v78 동일)
         all_idx = df_krw.index
         sel_y, sel_m, sel_d = globals().get('sel_y', all_idx[-1].year), globals().get('sel_m',
                                                                                       all_idx[-1].month), globals().get(
@@ -663,13 +670,13 @@ if not macro_growth.empty:
         _idx = all_idx.get_indexer([pd.Timestamp(sel_y, sel_m, sel_d)], method='pad')[0]
         actual_date = all_idx[_idx]
 
-        if "v78_target" not in st.session_state: st.session_state.v78_target = "반도체"
-        if "v78_map" in st.session_state:
-            event = st.session_state.v78_map
+        if "v81_target" not in st.session_state: st.session_state.v81_target = "반도체"
+        if "v81_map" in st.session_state:
+            event = st.session_state.v81_map
             if event and "selection" in event and event["selection"]["points"]:
-                st.session_state.v78_target = event["selection"]["points"][0].get("label")
+                st.session_state.v81_target = event["selection"]["points"][0].get("label")
 
-        # 3. 데이터 가공
+        # 3. 데이터 가공 (도미넌스용)
         _calc = []
         for name, info in sector_map.items():
             if name not in df_sec.columns: continue
@@ -680,81 +687,88 @@ if not macro_growth.empty:
             _calc.append({"섹터": name, "비중": vol if vol > 0 else 1.0, "수익률": ret})
         df_h = pd.DataFrame(_calc)
 
-        # 4. [핵심] 이미지 기반 커스텀 그라데이션 설정
-        # 왼쪽(탐욕/높은수익률): 녹색 -> 중간: 노랑/주황 -> 오른쪽(공포/낮은수익률): 빨강
-        # Plotly는 0.0(최소값)에서 1.0(최대값)으로 색상을 지정하므로 수익률 기준 역순 배치
-        user_gradient = [
-            [0.0, "#E74C3C"],  # 공포 (빨강)
-            [0.25, "#E67E22"],  # 주황
-            [0.5, "#F1C40F"],  # 노랑
-            [0.75, "#82E0AA"],  # 연녹색
-            [1.0, "#2ECC71"]  # 탐욕 (진녹색)
-        ]
-
+        # 레이아웃 설정
         col_l, col_r = st.columns([1.1, 0.9])
 
+        # --- 왼쪽 칼럼 (도미넌스 & 게이지) ---
         with col_l:
             st.subheader(f"🗺️ 시장 도미넌스 ({actual_date.strftime('%m/%d')})")
-
-            # 트리맵 색상 적용
-            fig = px.treemap(
-                df_h, path=["섹터"], values="비중", color="수익률",
-                color_continuous_scale=user_gradient,
-                range_color=[-3.0, 3.0]  # 색상 대비가 명확히 나타나는 범위
-            )
+            user_gradient = [[0.0, "#E74C3C"], [0.25, "#E67E22"], [0.5, "#F1C40F"], [0.75, "#82E0AA"], [1.0, "#2ECC71"]]
+            fig = px.treemap(df_h, path=["섹터"], values="비중", color="수익률", color_continuous_scale=user_gradient,
+                             range_color=[-3.0, 3.0])
             fig.update_traces(texttemplate="<b>%{label}</b><br>%{color:+.2f}%")
             fig.update_layout(margin=dict(t=0, l=0, r=0, b=0), coloraxis_showscale=False)
-            st.plotly_chart(fig, use_container_width=True, on_select="rerun", key="v78_map")
+            st.plotly_chart(fig, use_container_width=True, on_select="rerun", key="v81_map")
 
-            # 5. 공포-탐욕 게이지 색상 동기화
             avg_ret = df_h['수익률'].mean()
             score = max(-3, min(3, avg_ret * 1.5))
-
             gauge = go.Figure(go.Indicator(
-                mode="gauge+number", value=score,
-                title={'text': "Fear & Greed Index", 'font': {'size': 18}},
-                gauge={
-                    'axis': {'range': [-3, 3]},
-                    'bar': {'color': "black"},
-                    'steps': [
-                        {'range': [-3, -1.5], 'color': "#E74C3C"},  # 공포 (빨강)
-                        {'range': [-1.5, 0], 'color': "#F1C40F"},  # 주의 (노랑)
-                        {'range': [0, 1.5], 'color': "#82E0AA"},  # 양호 (연녹)
-                        {'range': [1.5, 3], 'color': "#2ECC71"}  # 탐욕 (진녹)
-                    ]
-                }
-            ))
-            # 라벨 추가 (이미지와 동일한 위치)
+                mode="gauge+number", value=score, title={'text': "Fear & Greed Index", 'font': {'size': 18}},
+                gauge={'axis': {'range': [-3, 3]}, 'bar': {'color': "black"},
+                       'steps': [{'range': [-3, -1.5], 'color': "#E74C3C"}, {'range': [-1.5, 0], 'color': "#F1C40F"},
+                                 {'range': [0, 1.5], 'color': "#82E0AA"}, {'range': [1.5, 3], 'color': "#2ECC71"}]}))
             gauge.add_annotation(x=0.1, y=0.1, text="<b>공포</b>", showarrow=False, font=dict(color="#E74C3C", size=15))
             gauge.add_annotation(x=0.9, y=0.1, text="<b>탐욕</b>", showarrow=False, font=dict(color="#2ECC71", size=15))
             gauge.update_layout(height=260, margin=dict(t=50, b=0, l=30, r=30))
             st.plotly_chart(gauge, use_container_width=True)
 
+        # --- 오른쪽 칼럼 (상세 종목 & 데이터 검증) ---
         with col_r:
-            active = st.session_state.v78_target
+            active = st.session_state.v81_target
             st.subheader(f"🔍 {active} 상세 종목")
 
-            # 상세 데이터 리스트업
             _details = []
+            _verify_data = []  # 시고저종 검증용 리스트
+
             if active in sector_map:
                 for t, n in zip(sector_map[active]["tickers"], sector_map[active]["names"]):
                     tid = str(t).zfill(6) if str(t).isdigit() else t
                     if tid not in df_krw.columns: continue
+
                     s_data = df_krw[tid].dropna()
                     if not s_data.empty:
                         k_pos = s_data.index.get_indexer([actual_date], method='pad')[0]
-                        c_p = s_data.iloc[k_pos]
-                        p_p = s_data.iloc[max(0, k_pos - 1)]
+                        c_p = s_data.iloc[k_pos]  # 종가(현재가)
+                        p_p = s_data.iloc[max(0, k_pos - 1)]  # 전일종가
+
+                        # 기본 리스트 데이터
                         _details.append({"종목명": n, "현재가": c_p, "수익률(%)": ((c_p / p_p) - 1) * 100 if p_p != 0 else 0})
 
+                        # [신규] 시고저종 검증 데이터 수집
+                        # 전역 변수에 해당 데이터가 있다면 매칭, 없다면 종가로 대체(구조 유지용)
+                        o_p = df_open[tid].iloc[k_pos] if df_open is not None else c_p
+                        h_p = df_high[tid].iloc[k_pos] if df_high is not None else c_p
+                        l_p = df_low[tid].iloc[k_pos] if df_low is not None else c_p
+
+                        _verify_data.append({
+                            "종목명": n,
+                            "시가": o_p,
+                            "고가": h_p,
+                            "저가": l_p,
+                            "종가": c_p
+                        })
+
+            # 메인 종목 테이블
             if _details:
                 st.dataframe(pd.DataFrame(_details).style.format({"현재가": "{:,.0f}원", "수익률(%)": "{:+.2f}%"})
                              .map(lambda v: f'color: {"#2ECC71" if v > 0 else "#E74C3C" if v < 0 else "black"}',
                                   subset=["수익률(%)"]),
-                             use_container_width=True, hide_index=True, height=580)
+                             use_container_width=True, hide_index=True, height=450)
+
+            # [핵심] 하단 데이터 검증 창 (시고저종)
+            st.markdown("---")
+            with st.expander("🛠️ 국장 종목 시고저종 데이터 검증 (클릭)"):
+                if _verify_data:
+                    v_df = pd.DataFrame(_verify_data)
+                    st.write(f"기준일자: {actual_date.strftime('%Y-%m-%d')}")
+                    st.table(v_df.style.format({
+                        "시가": "{:,.0f}", "고가": "{:,.0f}", "저가": "{:,.0f}", "종가": "{:,.0f}"
+                    }))
+                else:
+                    st.info("검증할 데이터가 없습니다.")
 
 
-    render_v78_custom_color_sync()
+    render_v81_verification_mode()
 
     # =========================
     # 📈 4. AI 분석 리포트 & 기상도
@@ -927,6 +941,7 @@ with summary_col4:
     # row_growth 기반 최저 자산 (에러 지점 해결)
     worst_asset = row_growth.idxmin()
     st.metric("Worst Asset", worst_asset, delta=f"{row_growth[worst_asset]:.2f}%", delta_color="inverse")
+
 # =========================
 # 📰 5. 뉴스 분석 (링크 포함)
 # =========================
@@ -1064,29 +1079,32 @@ target_stocks = {
     "LS": "006260"
 }
 
+
 def get_realtime_price(code):
     """네이버 금융에서 실시간 현재가를 크롤링합니다."""
     url = f"https://finance.naver.com/item/main.naver?code={code}"
-    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/110.0.0.0 Safari/537.36'}
-    
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/110.0.0.0 Safari/537.36'}
+
     try:
         res = requests.get(url, headers=headers)
         soup = BeautifulSoup(res.text, 'html.parser')
-        
+
         # 현재가 추출
         price_tag = soup.select_one(".no_today .blind")
         if not price_tag:
             return None, None, None, None
-            
+
         current_price = price_tag.text.replace(",", "")
-        
+
         # 전일대비 및 등락률 추출
         diff_tag = soup.select_one(".no_exday .blind")
-        rate_tag = soup.select_one(".no_exday .n_setso .blind") # 등락률 태그 위치는 사이트 구조에 따라 변동될 수 있음
-        
+        rate_tag = soup.select_one(".no_exday .n_setso .blind")  # 등락률 태그 위치는 사이트 구조에 따라 변동될 수 있음
+
         return int(current_price), diff_tag.text if diff_tag else "0", rate_tag.text if rate_tag else "0%"
     except Exception as e:
         return None, None, None
+
 
 # --- UI 레이아웃 ---
 st.set_page_config(page_title="실시간 국장 시세", layout="wide")
@@ -1101,13 +1119,13 @@ while True:
     with placeholder.container():
         now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
         st.write(f"⏱️ **최종 갱신 시각:** {now}")
-        
+
         # 메트릭 레이아웃 (3개 종목 나란히 배치)
         cols = st.columns(len(target_stocks))
-        
+
         for i, (name, code) in enumerate(target_stocks.items()):
             price, diff, rate = get_realtime_price(code)
-            
+
             if price:
                 # 등락에 따른 색상 및 기호 처리 (임시 로직)
                 cols[i].metric(
@@ -1121,19 +1139,19 @@ while True:
         # 시세 대조를 위한 테이블 형태 출력
         st.markdown("---")
         st.subheader("📊 데이터 검증 테이블")
-        
+
         # 예시용 간단 테이블 데이터 생성
         data_rows = []
         for name, code in target_stocks.items():
             price, _, _ = get_realtime_price(code)
             data_rows.append({"종목명": name, "종목코드": code, "현재가": f"{price:,.0f}" if price else "N/A"})
-        
+
         st.table(pd.DataFrame(data_rows))
-        
+
     # 30초 대기
     time.sleep(30)
-    st.rerun() # 스트림릿 앱 재실행
-    
+    st.rerun()  # 스트림릿 앱 재실행
+
 # =========================
 # 🔚 Footer
 # =========================
