@@ -78,25 +78,38 @@ usd_assets = ["Dow Jones", "Bitcoin", "NASDAQ", "S&P500", "Gold", "WTI", "Natura
 # =========================
 @st.cache_data(ttl=600)
 def load_all_data():
-    # 지수 데이터
+    # 1. 지수 데이터 (threads=False 추가)
     raw_all = yf.download(list(tickers.values()), start="2018-01-01", progress=False, threads=False)
 
+    if raw_all.empty:
+        st.error("지수 데이터를 가져오지 못했습니다. 잠시 후 다시 시도하세요.")
+        return pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
+
     raw_close = raw_all["Close"].ffill().bfill()
-    if isinstance(raw_close.columns, pd.MultiIndex): raw_close = raw_close.droplevel(0, axis=1)
+    if isinstance(raw_close.columns, pd.MultiIndex):
+        raw_close = raw_close.droplevel(0, axis=1)
+
     ticker_to_name = {v: k for k, v in tickers.items()}
     data = raw_close.rename(columns=ticker_to_name)
 
-    # [추가] 거래량 데이터 추출 및 가공
+    # 2. 거래량 데이터 추출
     raw_volume = raw_all["Volume"].ffill().fillna(0)
-    if isinstance(raw_volume.columns, pd.MultiIndex): raw_volume = raw_volume.droplevel(0, axis=1)
+    if isinstance(raw_volume.columns, pd.MultiIndex):
+        raw_volume = raw_volume.droplevel(0, axis=1)
     data_volume_indices = raw_volume.rename(columns=ticker_to_name)
 
-    # 매크로 데이터 (기존 로직 유지)
+    # 3. 매크로 데이터 (여기도 threads=False 추가 필수)
     m_tickers = {"US10Y": "^TNX", "US2Y": "^IRX", "DXY": "DX-Y.NYB"}
-    macro_raw = yf.download(list(m_tickers.values()), start="2018-01-01", progress=False)["Close"]
-    macro = macro_raw.ffill().bfill()
-    if isinstance(macro.columns, pd.MultiIndex): macro = macro.droplevel(0, axis=1)
-    macro = macro.rename(columns={v: k for k, v in m_tickers.items()})
+    # 매크로 수집 시에도 threads=False를 넣어줘야 깃허브에서 멈추지 않습니다.
+    macro_raw_all = yf.download(list(m_tickers.values()), start="2018-01-01", progress=False, threads=False)
+
+    if not macro_raw_all.empty:
+        macro_raw = macro_raw_all["Close"].ffill().bfill()
+        if isinstance(macro_raw.columns, pd.MultiIndex):
+            macro_raw = macro_raw.droplevel(0, axis=1)
+        macro = macro_raw.rename(columns={v: k for k, v in m_tickers.items()})
+    else:
+        macro = pd.DataFrame()
 
     return data, macro, data_volume_indices
 
