@@ -549,102 +549,89 @@ if not macro_growth.empty:
     # 📊 지수별 정리표
     # =========================
     import streamlit as st
+# 1. 모바일 3열 강제를 위한 초강력 CSS 설정
+st.markdown("""
+    <style>
+    /* 1. 컬럼을 감싸는 부모 컨테이너가 무조건 가로(row)로 배열되도록 강제 */
+    div[data-testid="column"] {
+        width: 33.33% !important;
+        flex: 1 1 33.33% !important;
+        min-width: 33.33% !important;
+    }
+    
+    /* 2. 모바일에서 세로로 쌓이는 현상 방지 */
+    div[data-testid="stHorizontalBlock"] {
+        display: flex !important;
+        flex-direction: row !important;
+        flex-wrap: nowrap !important;
+        align-items: stretch !important;
+    }
 
-    # 1. 모바일 3열 유지를 위한 CSS 주입 (기본 레이아웃 유지하며 스타일만 추가)
-    st.markdown("""
-        <style>
-        /* 모든 환경에서 st.columns가 세로로 겹치지 않게 설정 */
-        [data-testid="column"] {
-            width: calc(33.3333% - 1rem) !important;
-            flex: 1 1 calc(33.3333% - 1rem) !important;
-            min-width: calc(33.3333% - 1rem) !important;
-        }
+    /* 3. 모바일용 폰트 사이즈 최적화 (글자가 박스를 뚫고 나가지 않게) */
+    @media (max-width: 640px) {
+        .stCaption { font-size: 0.6rem !important; }
+        .stSubheader { font-size: 0.8rem !important; }
+        [data-testid="stMarkdownContainer"] p { font-size: 0.6rem !important; }
+        [data-testid="stMetricValue"] { font-size: 0.75rem !important; }
+        [data-testid="stMetricDelta"] { font-size: 0.6rem !important; }
+        div[data-testid="stContainer"] { padding: 0.2rem !important; }
+    }
+    </style>
+    """, unsafe_allow_html=True)
 
-        /* 모바일 가독성을 위한 미세 조정 (화면 너비 640px 이하) */
-        @media (max-width: 640px) {
-            /* 지수 이름 (Caption) 크기 조절 */
-            .stCaption {
-                font-size: 0.7rem !important;
-                white-space: nowrap !important;
-                overflow: hidden !important;
-                text-overflow: ellipsis !important;
-            }
-            /* 메인 수치 (Subheader) 크기 조절 */
-            .stSubheader {
-                font-size: 0.9rem !important;
-            }
-            /* 서브 수치 (USD 마크다운) 크기 조절 */
-            [data-testid="stMarkdownContainer"] p {
-                font-size: 0.65rem !important;
-            }
-            /* st.metric 값과 델타 크기 조절 */
-            [data-testid="stMetricValue"] {
-                font-size: 0.8rem !important;
-            }
-            [data-testid="stMetricDelta"] {
-                font-size: 0.7rem !important;
-            }
-            /* 컨테이너 내부 여백 줄임 */
-            div[data-testid="stContainer"] {
-                padding: 0.5rem !important;
-            }
-        }
-        </style>
-        """, unsafe_allow_html=True)
+st.markdown("### 📈 시장 지수 실시간 대시보드")
 
-    st.markdown("### 📈 시장 지수 실시간 대시보드")
+if date_idx > 0:
+    # 1. 데이터 추출 및 환산 로직 (기존 유지)
+    curr_usd = chart_data.iloc[date_idx].copy()
+    prev_usd = chart_data.iloc[date_idx - 1].copy()
+    curr_krw = curr_usd.copy()
+    prev_krw = prev_usd.copy()
 
-    if date_idx > 0:
-        # 1. 데이터 추출 및 환산 로직 (기존 유지)
-        curr_usd = chart_data.iloc[date_idx].copy()
-        prev_usd = chart_data.iloc[date_idx - 1].copy()
-        curr_krw = curr_usd.copy()
-        prev_krw = prev_usd.copy()
+    for col in usd_assets:
+        if col in curr_krw:
+            curr_krw[col] = curr_usd[col] * current_fx
+            prev_krw[col] = prev_usd[col] * current_fx
 
-        for col in usd_assets:
-            if col in curr_krw:  # 데이터 존재 여부 확인 추가 (안정성)
-                curr_krw[col] = curr_usd[col] * current_fx
-                prev_krw[col] = prev_usd[col] * current_fx
+    for col in ["KOSPI", "KOSDAQ"]:
+        if col in curr_krw:
+            curr_usd[col] = curr_krw[col] / current_fx
+            prev_usd[col] = prev_krw[col] / current_fx
 
-        for col in ["KOSPI", "KOSDAQ"]:
-            if col in curr_krw:
-                curr_usd[col] = curr_krw[col] / current_fx
-                prev_usd[col] = prev_krw[col] / current_fx
+    # 2. 증감 계산 (기존 유지)
+    diff_amt = curr_krw - prev_krw
+    diff_pct = (diff_amt / prev_krw) * 100
 
-        # 2. 증감 계산 (기존 유지)
-        diff_amt = curr_krw - prev_krw
-        diff_pct = (diff_amt / prev_krw) * 100
+    # 3. 카드 레이아웃 설정 (3열 구성)
+    display_order = [
+        ("🇺🇸 Dow Jones", "Dow Jones"), ("🇺🇸 NASDAQ", "NASDAQ"), ("🇺🇸 S&P500", "S&P500"),
+        ("🥇 Gold", "Gold"), ("₿ Bitcoin", "Bitcoin"), ("🛢️ WTI", "WTI"),
+        ("🔥 Nat Gas", "Natural Gas"), ("🇰🇷 KOSPI", "KOSPI"), ("🇰🇷 KOSDAQ", "KOSDAQ")
+    ]
 
-        # 3. 카드 레이아웃 설정 (3열 구성)
-        display_order = [
-            ("🇺🇸 Dow Jones", "Dow Jones"), ("🇺🇸 NASDAQ", "NASDAQ"), ("🇺🇸 S&P500", "S&P500"),
-            ("🥇 Gold", "Gold"), ("₿ Bitcoin", "Bitcoin"), ("🛢️ WTI Oil", "WTI"),
-            ("🔥 Natural Gas", "Natural Gas"), ("🇰🇷 KOSPI", "KOSPI"), ("🇰🇷 KOSDAQ", "KOSDAQ")
-        ]
+    rows = [display_order[i:i + 3] for i in range(0, len(display_order), 3)]
 
-        rows = [display_order[i:i + 3] for i in range(0, len(display_order), 3)]
+    for row in rows:
+        cols = st.columns(3)
+        for i, (label, key) in enumerate(row):
+            with cols[i]:
+                with st.container(border=True):
+                    # 지수 이름
+                    st.caption(label)
 
-        for row in rows:
-            cols = st.columns(3)
-            for i, (label, key) in enumerate(row):
-                with cols[i]:
-                    with st.container(border=True):
-                        # 지수 이름
-                        st.caption(label)
+                    # 메인 수치 (KRW)
+                    val_krw = curr_krw[key]
+                    st.subheader(f"{val_krw:,.0f} ₩")
 
-                        # 메인 수치 (KRW)
-                        val_krw = curr_krw[key]
-                        st.subheader(f"{val_krw:,.0f} ₩")
+                    # 서브 수치 (USD)
+                    val_usd = curr_usd[key]
+                    st.markdown(
+                        f"<p style='color: gray; font-size: 0.85rem; margin-top: -15px;'>($ {val_usd:,.2f})</p>",
+                        unsafe_allow_html=True)
 
-                        # 서브 수치 (USD)
-                        val_usd = curr_usd[key]
-                        st.markdown(
-                            f"<p style='color: gray; font-size: 0.85rem; margin-top: -15px;'>($ {val_usd:,.2f})</p>",
-                            unsafe_allow_html=True)
-
-                        # 변동폭 (st.metric 활용)
-                        pct_change = diff_pct[key]
-                        st.metric(label="전일대비", value=f"{diff_amt[key]:+,.0f} ₩", delta=f"{pct_change:+.2f}%")
+                    # 변동폭 (st.metric 활용)
+                    pct_change = diff_pct[key]
+                    st.metric(label="전일대비", value=f"{diff_amt[key]:+,.0f} ₩", delta=f"{pct_change:+.2f}%")
 
 
         # 4. 하단 환율 정보
