@@ -768,19 +768,6 @@ if not macro_growth.empty:
                                   subset=["수익률(%)"]),
                              use_container_width=True, hide_index=True, height=450)
 
-            # [핵심] 하단 데이터 검증 창 (시고저종)
-            st.markdown("---")
-            with st.expander("🛠️ 국장 종목 시고저종 데이터 검증 (클릭)"):
-                if _verify_data:
-                    v_df = pd.DataFrame(_verify_data)
-                    st.write(f"기준일자: {actual_date.strftime('%Y-%m-%d')}")
-                    st.table(v_df.style.format({
-                        "시가": "{:,.0f}", "고가": "{:,.0f}", "저가": "{:,.0f}", "종가": "{:,.0f}"
-                    }))
-                else:
-                    st.info("검증할 데이터가 없습니다.")
-
-
     render_v81_verification_mode()
 
     # =========================
@@ -790,7 +777,7 @@ if not macro_growth.empty:
     st.markdown(f"## 🤖 AI Multi-Asset Trend Report")
 
     # [수정] date_idx가 정의되어 있어야 합니다. (앞선 날짜 선택 로직에서 정의됨)
-    analysis_targets = ["NASDAQ", "Bitcoin", "Gold", "WTI", "KOSDAQ"]
+    analysis_targets = ["Dow Jones", "NASDAQ","S&P500", "Bitcoin", "Gold","KOSPI", "KOSDAQ", "WTI", "Natural Gas"]
     trend_results = []
     for t in analysis_targets:
         if t in data.columns:
@@ -821,35 +808,9 @@ if not macro_growth.empty:
             else:
                 st.info("#### AI 시장 진단\n방향성을 탐색 중인 **박스권/혼조세**입니다.")
 
-    # =========================
-    # 🏭 5. 섹터 기상도 및 테마 분석 (최적화)
-    # =========================
-    st.markdown("### 🏭 Sector Weather Map")
-    if 'sector_df' in locals() and not sector_df.empty:
-        # [수정] actual_date -> actual_valid_date로 변수명 통일 및 안전한 인덱싱
-        try:
-            s_idx_list = sector_df.index.get_indexer([actual_valid_date], method='pad')
-            s_idx = s_idx_list[0]
-
-            # 인덱스 범위 초과 방지
-            if s_idx < 0: s_idx = 0
-            if s_idx >= len(sector_df): s_idx = len(sector_df) - 1
-
-            p_idx = max(0, s_idx - 20)
-            met_cols = st.columns(len(sector_df.columns))
-
-            for i, col_name in enumerate(sector_df.columns):
-                # 분모가 0이 되는 것을 방지하기 위한 처리
-                prev_val = sector_df[col_name].iloc[p_idx]
-                curr_val = sector_df[col_name].iloc[s_idx]
-
-                ret = ((curr_val / prev_val) - 1) * 100 if prev_val != 0 else 0
-                emoji = "☀️" if ret > 3 else "☁️" if ret > -1 else "🌧️"
-                met_cols[i].metric(col_name, f"{ret:.1f}%", emoji)
-        except Exception as e:
-            st.error(f"Weather Map 생성 중 오류가 발생했습니다: {e}")
-
-    # 테마 추천 섹션
+#==============================
+# 테마 추천 섹션
+# ==============================
     st.markdown("---")
     st.markdown("### 🤖 AI 섹터/테마 일관성 분석")
 
@@ -1060,12 +1021,14 @@ st.markdown("---")
 st.markdown("### 🌐 글로벌 뉴스")
 
 global_keywords = {
-    "미국 금리": "(Treasuries",
-    "미국": "Donald Trump Election US",
+    "미국 금리": "Treasuries",
+    "미국": "Donald Trump Election US WAR",
     "지정학적 리스크": "Oil Middle East Tension",
     "가상자산": "Bitcoin Crypto Regulation",
     "중국": "China US relations invasion of Taiwan",
-    "한국": "Korea Debt to GDP"
+    "한국": "Korea Debt to GDP",
+    "증시": "Stock Market Equity",
+    "원유": "Oil shock",
 }
 
 global_cols = st.columns(2)
@@ -1085,6 +1048,8 @@ for i, (kr_name, en_keyword) in enumerate(global_keywords.items()):
                     st.markdown(f"🔗 [기사 원문 읽기]({news['link']})")
         st.markdown("---")
 
+
+#======= 점검용
 # 1. 대상 종목 및 증권사 코드 설정
 target_stocks = {
     "삼성전자": "005930",
@@ -1092,7 +1057,6 @@ target_stocks = {
     "LS": "006260"
 }
 
-#======= 점검용
 # 1. 대상 종목 설정 (삼성전자, 현대차, LS)
 TARGET_STOCKS = {
     "삼성전자": "005930",
@@ -1196,12 +1160,12 @@ while True:
             # 테이블 출력
             st.table(v_df.style.format("{:,}"))
 
-            st.caption("※ 네이버 금융 API(polling.finance.naver.com)를 직접 호출하여 30초마다 갱신합니다.")
+            st.caption("※ 네이버 금융 API(polling.finance.naver.com)를 직접 호출하여 60초마다 갱신합니다.")
         else:
             st.error("데이터를 불러오는 데 실패했습니다. 장 중인지 확인하거나 잠시 후 다시 시도해 주세요.")
 
     # 30초 대기 후 리런
-    time.sleep(30)
+    time.sleep(60)
     st.rerun()
 
 # =========================
