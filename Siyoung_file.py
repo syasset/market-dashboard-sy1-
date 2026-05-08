@@ -310,11 +310,10 @@ if not macro_growth.empty:
     # 3. 레이아웃 설정 (확대 고정 및 너비 최적화)
     fig2.update_layout(
         template="plotly_dark",
+        # [수정] 기본 동작을 '확대'가 아닌 '이동(Pan)'으로 설정 (모바일 드래그용)
         dragmode="pan",
         height=650,
-        # [추가] 확대/축소 시 상태 유지를 위한 설정
         uirevision='constant',
-        # 우측 여백을 충분히 주어 긴 지표명 태그가 잘리지 않게 함
         margin=dict(l=30, r=130, t=80, b=50),
         showlegend=True,
         legend=dict(
@@ -327,17 +326,23 @@ if not macro_growth.empty:
         ),
         xaxis=dict(
             showgrid=False,
-            # 마지막 데이터 뒤에 15일 정도의 여유 공간을 두어 태그 배치 최적화
-            range=[macro_growth.index[0], macro_growth.index[-1] + pd.Timedelta(days=15)]
+            # [추가] 고정 범위 설정이 아닌 유동적 범위를 위해 fixedrange 해제 (기본값)
+            range=[macro_growth.index, macro_growth.index[-1] + pd.Timedelta(days=15)]
         ),
         yaxis=dict(
             zeroline=True,
             zerolinecolor="rgba(255,255,255,0.2)",
-            title="수익률/변화율 (%)"
+            title="수익률/변화율 (%)",
+            fixedrange=False  # Y축도 자유롭게 확대/축소 가능하게 설정
         )
     )
 
-    st.plotly_chart(fig2, use_container_width=True, config={"scrollZoom": True})
+    st.plotly_chart(fig2, use_container_width=True, config={
+        "scrollZoom": True,  # 마우스 휠 및 터치패드 줌 활성화
+        "displayModeBar": True,  # 상단 도구 모음 표시 (필요시 확대/축소 리셋 가능)
+        "modeBarButtonsToRemove": ["select2d", "lasso2d"],  # 불필요한 선택 도구 제거
+        "responsive": True  # 화면 크기 변화에 대응
+    })
 
 # =========================
 # 📅 기간별 섹터 분석 선택
