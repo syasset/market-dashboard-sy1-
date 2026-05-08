@@ -310,38 +310,39 @@ if not macro_growth.empty:
     # 3. 레이아웃 설정 (확대 고정 및 너비 최적화)
     fig2.update_layout(
         template="plotly_dark",
-        # [수정] 기본 동작을 '확대'가 아닌 '이동(Pan)'으로 설정 (모바일 드래그용)
-        dragmode="pan",
+        # [수정] 다시 zoom으로 설정하되, 모바일에서 튀는 현상을 막기 위해 설정을 보강합니다.
+        dragmode="zoom", 
         height=650,
         uirevision='constant',
         margin=dict(l=30, r=130, t=80, b=50),
         showlegend=True,
         legend=dict(
-            orientation="h",
-            yanchor="bottom",
-            y=1.02,
-            xanchor="right",
-            x=1,
+            orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1,
             font=dict(size=11)
         ),
         xaxis=dict(
             showgrid=False,
-            # [추가] 고정 범위 설정이 아닌 유동적 범위를 위해 fixedrange 해제 (기본값)
+            # [추가] 축 고정(fixedrange)을 False로 두어야 터치 줌이 먹힙니다.
+            fixedrange=False,
             range=[macro_growth.index, macro_growth.index[-1] + pd.Timedelta(days=15)]
         ),
         yaxis=dict(
             zeroline=True,
             zerolinecolor="rgba(255,255,255,0.2)",
             title="수익률/변화율 (%)",
-            fixedrange=False  # Y축도 자유롭게 확대/축소 가능하게 설정
+            fixedrange=False # Y축도 터치로 확대 가능하게 설정
         )
     )
 
     st.plotly_chart(fig2, use_container_width=True, config={
-        "scrollZoom": True,  # 마우스 휠 및 터치패드 줌 활성화
-        "displayModeBar": True,  # 상단 도구 모음 표시 (필요시 확대/축소 리셋 가능)
-        "modeBarButtonsToRemove": ["select2d", "lasso2d"],  # 불필요한 선택 도구 제거
-        "responsive": True  # 화면 크기 변화에 대응
+        "scrollZoom": True,           # 두 손가락 줌 활성화
+        "displayModeBar": True,       # 모바일에서 확대 후 리셋을 위해 도구모음 표시
+        "modeBarButtonsToRemove": ["select2d", "lasso2d"],
+        "displaylogo": False,
+        "doubleClick": "reset",       # [추가] 모바일에서 차트가 꼬이면 더블 탭으로 리셋
+        "showTips": False,            # 모바일에서 툴팁 방해 제거
+        "responsive": True,
+        # 터치 감도를 위해 'scrollZoom'을 켜두고 드래그 모드를 조정하는 것이 핵심입니다.
     })
 
 # =========================
