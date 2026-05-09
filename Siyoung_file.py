@@ -1,8 +1,3 @@
-
-# =========================
-import streamlit as st
-import yfinance as yf
-import pandas as pd
 import plotly.graph_objects as go
 import plotly.express as px
 import feedparser
@@ -12,31 +7,36 @@ import pytz
 import re
 import html
 from urllib.parse import quote
-
-st.set_page_config(layout="wide", page_title="AI Financial Dashboard")
-
-# 1. 테마주 검색 및 리스트 업데이트 함수 (가상 로직)
 import requests
 from bs4 import BeautifulSoup
-import time    # 대기 시간용
+import time
 import random
+import streamlit as st  # 이 줄이 반드시 있어야 합니다!
+import yfinance as yf
+import pandas as pd
 
+st.set_page_config(layout="wide", page_title="AI Financial Dashboard")
 
 # 📊 섹터 매핑 설정
 # =========================
 SECTOR_MAP = {
-    "Tech": {"themes": ["AI", "반도체", "클라우드", "소프트웨어", "데이터센터", "로봇"], "anchors": {"NASDAQ": 0.6, "S&P500": 0.3, "KOSDAQ": 0.1}},
-    "Energy": {"themes": ["에너지", "정유", "LNG", "원유", "WTI", "천연가스"], "anchors": {"WTI": 0.5, "Natural Gas": 0.3, "S&P500": 0.2}},
-    "GreenEnergy": {"themes": ["태양광", "풍력", "수소", "원자력", "2차전지"], "anchors": {"NASDAQ": 0.3, "KOSPI": 0.3, "KOSDAQ": 0.3, "S&P500": 0.1}},
+    "Tech": {"themes": ["AI", "반도체", "클라우드", "소프트웨어", "데이터센터", "로봇"],
+             "anchors": {"NASDAQ": 0.6, "S&P500": 0.3, "KOSDAQ": 0.1}},
+    "Energy": {"themes": ["에너지", "정유", "LNG", "원유", "WTI", "천연가스"],
+               "anchors": {"WTI": 0.5, "Natural Gas": 0.3, "S&P500": 0.2}},
+    "GreenEnergy": {"themes": ["태양광", "풍력", "수소", "원자력", "2차전지"],
+                    "anchors": {"NASDAQ": 0.3, "KOSPI": 0.3, "KOSDAQ": 0.3, "S&P500": 0.1}},
     "Crypto": {"themes": ["비트코인", "블록체인", "핀테크"], "anchors": {"Bitcoin": 0.8, "NASDAQ": 0.2}},
     "Defensive": {"themes": ["금", "채권", "리츠", "유틸리티"], "anchors": {"Gold": 0.7, "S&P500": 0.2, "KOSPI": 0.1}},
-    "Industrial": {"themes": ["자동차", "전기차", "조선", "철강", "방산", "우주항공", "드론", "건설", "화학"], "anchors": {"S&P500": 0.4, "KOSPI": 0.4, "WTI": 0.1, "Natural Gas": 0.1}},
+    "Industrial": {"themes": ["자동차", "전기차", "조선", "철강", "방산", "우주항공", "드론", "건설", "화학"],
+                   "anchors": {"S&P500": 0.4, "KOSPI": 0.4, "WTI": 0.1, "Natural Gas": 0.1}},
     "Healthcare": {"themes": ["헬스케어", "제약", "바이오"], "anchors": {"NASDAQ": 0.4, "S&P500": 0.4, "KOSPI": 0.2}},
-    "Consumer": {"themes": ["항공", "여행", "카지노", "엔터", "미디어", "게임", "유통", "물류", "식품", "플랫폼", "교육"], "anchors": {"S&P500": 0.4, "KOSPI": 0.3, "KOSDAQ": 0.2, "NASDAQ": 0.1}},
+    "Consumer": {"themes": ["항공", "여행", "카지노", "엔터", "미디어", "게임", "유통", "물류", "식품", "플랫폼", "교육"],
+                 "anchors": {"S&P500": 0.4, "KOSPI": 0.3, "KOSDAQ": 0.2, "NASDAQ": 0.1}},
     "KoreaSpecial": {"themes": ["KOSPI대형주", "스마트팜"], "anchors": {"KOSPI": 0.7, "KOSDAQ": 0.3}}
 }
 
-theme_pool = [t for s in SECTOR_MAP.values() for t in s["themes"]]
+# 📌 자산 정의 통합
 tickers = {
     "Dow Jones": "^DJI", "NASDAQ": "^IXIC", "S&P500": "^GSPC", "Bitcoin": "BTC-USD",
     "KOSPI": "^KS11", "KOSDAQ": "^KQ11", "Gold": "GC=F", "WTI": "CL=F",
@@ -44,9 +44,6 @@ tickers = {
 }
 usd_assets = ["Dow Jones", "Bitcoin", "NASDAQ", "S&P500", "Gold", "WTI", "Natural Gas"]
 
-# =========================
-# ⏱ 업데이트 시간 (한국 시간 기준)
-# =========================
 # 한국 시간대 설정
 korea_time = datetime.now(pytz.timezone("Asia/Seoul"))
 
@@ -55,256 +52,222 @@ st.markdown(
     unsafe_allow_html=True
 )
 
-# ---------------------------------------------------------
-# 1. 거물들의 포트폴리오
-# ---------------------------------------------------------
 
-@st.cache_data(ttl=86400)  # 하루에 한 번만 새로고침 (13F는 분기별 발표라 자주 할 필요 없음)
-@st.cache_data(ttl=86400)  # 하루에 한 번만 실행하여 속도 최적화
+# ---------------------------------------------------------
+# 1. 거물들의 포트폴리오 (캐싱 적용)
+# ---------------------------------------------------------
+@st.cache_data(ttl=86400)
 def get_whale_portfolio():
-    """
-    거물들의 포트폴리오 데이터를 자동으로 가져오거나
-    최신 공시 데이터를 반환하는 함수
-    """
     try:
-        # [자동화 로직 예시]
-        # 실제로는 SEC EDGAR나 금융 API를 연결하지만,
-        # 여기서는 가장 최신의 공시 비중을 변수화하여 자동 관리의 기초를 만듭니다.
-
-        # 팁: 나중에 특정 URL에서 테이블을 긁어오려면 pd.read_html(URL)을 사용하세요.
         whale_data = {
-            "Berkshire": {
-                "AAPL": 40.0, "AXP": 12.5, "BAC": 10.5, "KO": 9.0, "CVX": 8.0, "OXY": 5.0
-            },
-            "NPS": {
-                "MSFT": 6.5, "AAPL": 6.2, "NVDA": 5.8, "AMZN": 4.5, "GOOGL": 3.8, "META": 3.2
-            }
+            "Berkshire": {"AAPL": 40.0, "AXP": 12.5, "BAC": 10.5, "KO": 9.0, "CVX": 8.0, "OXY": 5.0},
+            "NPS": {"MSFT": 6.5, "AAPL": 6.2, "NVDA": 5.8, "AMZN": 4.5, "GOOGL": 3.8, "META": 3.2}
         }
         return whale_data
     except Exception as e:
         st.error(f"데이터 로드 중 오류 발생: {e}")
         return None
 
+
 # ---------------------------------------------------------
-# 2. 메인 실행부
+# 2. 메인 데이터 로드 함수 (통합 및 최적화)
+# ---------------------------------------------------------
+@st.cache_data(ttl=600)
+def load_all_data():
+    # 1. 티커-이름 매핑 정의 (중복 티커 제거를 위해 구조 변경)
+    # ^IRX는 미국 3개월물 국채 수익률이므로 정확한 명칭으로 하나만 사용 권장
+    m_tickers = {
+        "^TNX": "US10Y",
+        "^IRX": "US_Rate_3M",  # ^IRX는 13주(3개월)물입니다. 2년물은 ^ZTR 등이지만 야후에서 제공이 불안정할 수 있음
+        "DX-Y.NYB": "DXY",
+        "272580.KS": "KR_Rate"
+    }
+
+    # 2. 데이터 다운로드
+    all_ticker_list = list(set(list(tickers.values()) + list(m_tickers.keys())))
+    raw_all = yf.download(all_ticker_list, start="2018-01-01", progress=False, threads=False)
+
+    if raw_all.empty:
+        return pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
+
+    # 종가 정리
+    raw_close = raw_all["Close"].ffill().bfill()
+    if isinstance(raw_close.columns, pd.MultiIndex):
+        raw_close = raw_close.droplevel(0, axis=1)
+
+    # [지수 데이터 처리]
+    ticker_to_name = {v: k for k, v in tickers.items()}
+    # tickers에 정의된 값이 실제 다운로드된 컬럼에 있는지 확인 후 추출
+    valid_indices = [v for v in tickers.values() if v in raw_close.columns]
+    data = raw_close[valid_indices].rename(columns=ticker_to_name)
+
+    # [거래량 데이터 처리]
+    raw_volume = raw_all["Volume"].ffill().fillna(0)
+    if isinstance(raw_volume.columns, pd.MultiIndex):
+        raw_volume = raw_volume.droplevel(0, axis=1)
+    data_volume_indices = raw_volume[valid_indices].rename(columns=ticker_to_name)
+
+    # [매크로 데이터 처리] - 이 부분이 에러의 핵심 해결 구간
+    # 존재하는 티커만 필터링하여 1:1로 이름을 변경함 (중복 발생 원천 차단)
+    valid_macro_tickers = [t for t in m_tickers.keys() if t in raw_close.columns]
+    macro = raw_close[valid_macro_tickers].rename(columns=m_tickers)
+
+    return data, macro, data_volume_indices
+
+# 데이터 실행
+data, macro, data_volume_indices = load_all_data()
+
+
+def calculate_growth(df):
+    if df.empty: return pd.DataFrame()
+    return (df / df.iloc[0] - 1) * 100
+
+
+growth = calculate_growth(data)
+macro_growth = calculate_growth(macro)
+
+# KRW 환산 시계열
+if not data.empty:
+    chart_data = data.drop(columns=["USDKRW"])
+    data_krw = chart_data.copy()
+    for col in usd_assets:
+        if col in chart_data.columns:
+            data_krw[col] = chart_data[col] * data["USDKRW"]
+else:
+    data_krw = pd.DataFrame()
+
+# ---------------------------------------------------------
+# 3. 메인 실행부
 # ---------------------------------------------------------
 if __name__ == "__main__":
-    # [A] 기존 상단 대시보드 영역 (Market Sentiment, Worst Asset 등)
-
-    # ---------------------------------------------------------
-    # [B] Whale Tracking 영역 (들여쓰기 없이 벽에 붙여서 작성)
-    # ---------------------------------------------------------
-
-    st.write("")  # 상단 지표와의 시각적 간격 확보
+    st.write("")
 
     with st.container():
         st.markdown("---")
         st.markdown("<h2 style='text-align: center;'>🐳 거물들의 포트폴리오 (Whale Tracking)</h2>", unsafe_allow_html=True)
-        st.write("")
-
-        # [해결점] 여기서 위에서 정의한 함수를 정확한 이름으로 호출합니다.
         whales = get_whale_portfolio()
 
         if whales:
             col_w1, col_w2 = st.columns(2)
-
             with col_w1:
                 st.markdown("<h4 style='text-align: center;'>🇺🇸 Berkshire Hathaway</h4>", unsafe_allow_html=True)
                 df_bh = pd.DataFrame(list(whales["Berkshire"].items()), columns=["Ticker", "Weight"])
-                fig_bh = px.pie(df_bh, values="Weight", names="Ticker", hole=0.4, color_discrete_sequence=px.colors.sequential.RdBu)
-                fig_bh.update_layout(height=400, margin=dict(t=20, b=80, l=20, r=20), showlegend=True,
-                                    legend=dict(orientation="h", yanchor="bottom", y=-0.4, xanchor="center", x=0.5))
+                fig_bh = px.pie(df_bh, values="Weight", names="Ticker", hole=0.4,
+                                color_discrete_sequence=px.colors.sequential.RdBu)
                 st.plotly_chart(fig_bh, use_container_width=True, key="bh_final_chart")
                 st.dataframe(df_bh.set_index("Ticker").T, use_container_width=True)
 
             with col_w2:
                 st.markdown("<h4 style='text-align: center;'>🇰🇷 National Pension Service</h4>", unsafe_allow_html=True)
                 df_nps = pd.DataFrame(list(whales["NPS"].items()), columns=["Ticker", "Weight"])
-                fig_nps = px.pie(df_nps, values="Weight", names="Ticker", hole=0.4, color_discrete_sequence=px.colors.sequential.Mint)
-                fig_nps.update_layout(height=400, margin=dict(t=20, b=80, l=20, r=20), showlegend=True,
-                                     legend=dict(orientation="h", yanchor="bottom", y=-0.4, xanchor="center", x=0.5))
+                fig_nps = px.pie(df_nps, values="Weight", names="Ticker", hole=0.4,
+                                 color_discrete_sequence=px.colors.sequential.Mint)
                 st.plotly_chart(fig_nps, use_container_width=True, key="nps_final_chart")
                 st.dataframe(df_nps.set_index("Ticker").T, use_container_width=True)
 
-# =========================
-# 📌 자산 정의
-# =========================
-tickers = {
-    "Bitcoin": "BTC-USD",
-    "KOSPI": "^KS11",
-    "Dow Jones": "^DJI",
-    "KOSDAQ": "^KQ11",
-    "NASDAQ": "^IXIC",
-    "S&P500": "^GSPC",
-    "Gold": "GC=F",
-    "WTI": "CL=F",
-    "Natural Gas": "NG=F",
-    "USDKRW": "USDKRW=X"
-}
+    # =========================
+    # 📊 자산 차트
+    # =========================
+    st.markdown("## 🌍📊 지수, 섹터별 지표")
+    st.markdown(f"### 📈 지수차트")
 
-usd_assets = ["Dow Jones", "Bitcoin", "NASDAQ", "S&P500", "Gold", "WTI", "Natural Gas"]
+    if not growth.empty:
+        fig = go.Figure()
 
-# =========================
-# 📊 데이터 로드 및 처리함수
-# =========================
-@st.cache_data(ttl=600)
-def load_all_data():
-    # 1. 지수 데이터 (threads=False 추가)
-    raw_all = yf.download(list(tickers.values()), start="2018-01-01", progress=False, threads=False)
+        custom_colors = [
+            "#1f77b4", "#ff7f0e", "#2ca02c", "#d62728",
+            "#9467bd", "#8c564b", "#e377c2", "#7f7f7f",
+            "#bcbd22", "#17becf"
+        ]
 
-    if raw_all.empty:
-        st.error("지수 데이터를 가져오지 못했습니다. 잠시 후 다시 시도하세요.")
-        return pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
+        last_points = []
 
-    raw_close = raw_all["Close"].ffill().bfill()
-    if isinstance(raw_close.columns, pd.MultiIndex):
-        raw_close = raw_close.droplevel(0, axis=1)
+        # 1. 차트 선 그리기
+        for i, col in enumerate(growth.columns):
+            if col == "USDKRW":
+                continue
 
-    ticker_to_name = {v: k for k, v in tickers.items()}
-    data = raw_close.rename(columns=ticker_to_name)
+            line_color = custom_colors[i % len(custom_colors)]
 
-    # 2. 거래량 데이터 추출
-    raw_volume = raw_all["Volume"].ffill().fillna(0)
-    if isinstance(raw_volume.columns, pd.MultiIndex):
-        raw_volume = raw_volume.droplevel(0, axis=1)
-    data_volume_indices = raw_volume.rename(columns=ticker_to_name)
+            fig.add_trace(go.Scatter(
+                x=growth.index,
+                y=growth[col],
+                customdata=data_krw[col],
+                name=col,
+                mode='lines',
+                # [핵심 수정] 확대 시 선 굵기 고정 설정
+                line=dict(
+                    width=1,
+                    color=line_color
+                ),
+                # 확대해도 굵기가 변하지 않도록 하는 시각적 효과 (SVG 속성 활용)
+                marker=dict(line=dict(width=0)),
+                hovertemplate="📅 %{x|%Y-%m-%d}<br><b>%{fullData.name}</b><br>📈 %{y:.2f}%<br>💰 %{customdata:,.0f}<extra></extra>"
+            ))
 
-    # 3. 매크로 데이터 (여기도 threads=False 추가 필수)
-    m_tickers = {"US10Y": "^TNX", "US2Y": "^IRX", "DXY": "DX-Y.NYB", "US_Rate": "^IRX", "KR_Rate": "272580.KS"}
-    # 매크로 수집 시에도 threads=False를 넣어줘야 깃허브에서 멈추지 않습니다.
-    macro_raw_all = yf.download(list(m_tickers.values()), start="2018-01-01", progress=False, threads=False)
+            last_points.append({
+                "col": col,
+                "y": growth[col].iloc[-1],
+                "val": data_krw[col].iloc[-1],
+                "color": line_color
+            })
 
-    if not macro_raw_all.empty:
-        macro_raw = macro_raw_all["Close"].ffill().bfill()
-        if isinstance(macro_raw.columns, pd.MultiIndex):
-            macro_raw = macro_raw.droplevel(0, axis=1)
-        macro = macro_raw.rename(columns={v: k for k, v in m_tickers.items()})
-    else:
-        macro = pd.DataFrame()
+        # 모든 선에 대해 확대 시 굵기 변동 방지 강제 적용
+        fig.update_traces(line=dict(width=1))
 
-    return data, macro, data_volume_indices
+        # 2. 태그 로직 (기존 동일)
+        last_points.sort(key=lambda x: x['y'], reverse=True)
 
+        for i, p in enumerate(last_points):
+            is_right = i % 2 == 0
+            side_offset = 60 if is_right else -60
+            x_anchor = "left" if is_right else "right"
 
-def calculate_growth(df):
-    # 벡터 연산으로 속도 최적화
-    return (df / df.iloc[0] - 1) * 100
+            fig.add_annotation(
+                x=growth.index[-1],
+                y=p['y'],
+                text=f"<b>{p['col']}</b><br>{p['val']:,.0f}",
+                showarrow=True,
+                arrowhead=2,
+                arrowsize=1,
+                arrowwidth=1.5,
+                arrowcolor=p['color'],
+                ax=side_offset,
+                ay=0,
+                xanchor=x_anchor,
+                yanchor="middle",
+                font=dict(size=11, color="white"),
+                bgcolor=p['color'],
+                opacity=0.9,
+                bordercolor="white",
+                borderwidth=1,
+                borderpad=4
+            )
 
-
-# 데이터 로딩
-data, macro, data_volume_indices = load_all_data()
-growth = calculate_growth(data)
-macro_growth = calculate_growth(macro)
-
-# KRW 환산 시계열 (차트용)
-chart_data = data.drop(columns=["USDKRW"])
-data_krw = chart_data.copy()
-for col in usd_assets:
-    data_krw[col] = chart_data[col] * data["USDKRW"]
-
-
-# =========================
-# 📊 자산 차트
-# =========================
-st.markdown("## 🌍📊 지수, 섹터별 지표")
-st.markdown(f"### 📈 지수차트")
-
-if not growth.empty:
-    fig = go.Figure()
-
-    custom_colors = [
-        "#1f77b4", "#ff7f0e", "#2ca02c", "#d62728",
-        "#9467bd", "#8c564b", "#e377c2", "#7f7f7f",
-        "#bcbd22", "#17becf"
-    ]
-
-    last_points = []
-
-    # 1. 차트 선 그리기
-    for i, col in enumerate(growth.columns):
-        if col == "USDKRW":
-            continue
-
-        line_color = custom_colors[i % len(custom_colors)]
-
-        fig.add_trace(go.Scatter(
-            x=growth.index,
-            y=growth[col],
-            customdata=data_krw[col],
-            name=col,
-            mode='lines',
-            # [핵심 수정] 확대 시 선 굵기 고정 설정
-            line=dict(
-                width=1,
-                color=line_color
+        # 3. 레이아웃 설정
+        fig.update_layout(
+            template="plotly_dark",
+            dragmode="pan",
+            height=650,
+            # [핵심 수정] 확대 상태 유지 및 렌더링 최적화
+            uirevision='constant',
+            margin=dict(l=30, r=120, t=80, b=50),
+            showlegend=True,
+            legend=dict(
+                orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1
             ),
-            # 확대해도 굵기가 변하지 않도록 하는 시각적 효과 (SVG 속성 활용)
-            marker=dict(line=dict(width=0)),
-            hovertemplate="📅 %{x|%Y-%m-%d}<br><b>%{fullData.name}</b><br>📈 %{y:.2f}%<br>💰 %{customdata:,.0f}<extra></extra>"
-        ))
-
-        last_points.append({
-            "col": col,
-            "y": growth[col].iloc[-1],
-            "val": data_krw[col].iloc[-1],
-            "color": line_color
-        })
-
-    # 모든 선에 대해 확대 시 굵기 변동 방지 강제 적용
-    fig.update_traces(line=dict(width=1))
-
-    # 2. 태그 로직 (기존 동일)
-    last_points.sort(key=lambda x: x['y'], reverse=True)
-
-    for i, p in enumerate(last_points):
-        is_right = i % 2 == 0
-        side_offset = 60 if is_right else -60
-        x_anchor = "left" if is_right else "right"
-
-        fig.add_annotation(
-            x=growth.index[-1],
-            y=p['y'],
-            text=f"<b>{p['col']}</b><br>{p['val']:,.0f}",
-            showarrow=True,
-            arrowhead=2,
-            arrowsize=1,
-            arrowwidth=1.5,
-            arrowcolor=p['color'],
-            ax=side_offset,
-            ay=0,
-            xanchor=x_anchor,
-            yanchor="middle",
-            font=dict(size=11, color="white"),
-            bgcolor=p['color'],
-            opacity=0.9,
-            bordercolor="white",
-            borderwidth=1,
-            borderpad=4
+            xaxis=dict(
+                showgrid=False,
+                range=[growth.index[0], growth.index[-1] + pd.Timedelta(days=10)]
+            ),
+            yaxis=dict(
+                zeroline=True,
+                zerolinecolor="rgba(255,255,255,0.2)",
+                side="left"
+            )
         )
 
-    # 3. 레이아웃 설정
-    fig.update_layout(
-        template="plotly_dark",
-        dragmode="pan",
-        height=650,
-        # [핵심 수정] 확대 상태 유지 및 렌더링 최적화
-        uirevision='constant',
-        margin=dict(l=30, r=120, t=80, b=50),
-        showlegend=True,
-        legend=dict(
-            orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1
-        ),
-        xaxis=dict(
-            showgrid=False,
-            range=[growth.index[0], growth.index[-1] + pd.Timedelta(days=10)]
-        ),
-        yaxis=dict(
-            zeroline=True,
-            zerolinecolor="rgba(255,255,255,0.2)",
-            side="left"
-        )
-    )
-
-    st.plotly_chart(fig, use_container_width=True, config={"scrollZoom": True})
+        st.plotly_chart(fig, use_container_width=True, config={"scrollZoom": True})
 
 # =========================
 # 🌍 매크로 차트
