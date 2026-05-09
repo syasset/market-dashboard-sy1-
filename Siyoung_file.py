@@ -701,6 +701,32 @@ if not macro_growth.empty:
             if key in val: return f'color: {color}; font-weight: bold'
         return 'color: #f1c40f; font-weight: bold'
 
+
+    # =========================================================
+    # 🔗 상관관계
+    # =========================================================
+    def render_correlation_analysis(df):
+        st.markdown("### 🔗 자산 간 상관관계 분석 (최근 120일)")
+
+        # 최근 120일 데이터 기준 상관계수 계산
+        corr = df.tail(120).corr()
+
+        fig_corr = px.imshow(
+            corr,
+            text_auto=".2f",
+            aspect="auto",
+            color_continuous_scale="RdBu_r",  # 상승(빨강)-하락(파랑) 반전
+            zmin=-1, zmax=1,
+            title="Asset Correlation Heatmap"
+        )
+        fig_corr.update_layout(height=500, margin=dict(t=50, b=10, l=10, r=10))
+        st.plotly_chart(fig_corr, use_container_width=True)
+
+
+    # 실행 시 (데이터 로드 후 적절한 위치에서 호출)
+    render_correlation_analysis(data.drop(columns=["USDKRW"]))
+    
+
     # =========================================================
     # 📈 [보강] 도미넌스 & 실시간 상세 리포트
     # =========================================================
