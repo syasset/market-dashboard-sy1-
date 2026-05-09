@@ -55,6 +55,77 @@ st.markdown(
     unsafe_allow_html=True
 )
 
+# ---------------------------------------------------------
+# 1. 거물들의 포트폴리오
+# ---------------------------------------------------------
+
+@st.cache_data(ttl=86400)  # 하루에 한 번만 새로고침 (13F는 분기별 발표라 자주 할 필요 없음)
+@st.cache_data(ttl=86400)  # 하루에 한 번만 실행하여 속도 최적화
+def get_whale_portfolio():
+    """
+    거물들의 포트폴리오 데이터를 자동으로 가져오거나
+    최신 공시 데이터를 반환하는 함수
+    """
+    try:
+        # [자동화 로직 예시]
+        # 실제로는 SEC EDGAR나 금융 API를 연결하지만,
+        # 여기서는 가장 최신의 공시 비중을 변수화하여 자동 관리의 기초를 만듭니다.
+
+        # 팁: 나중에 특정 URL에서 테이블을 긁어오려면 pd.read_html(URL)을 사용하세요.
+        whale_data = {
+            "Berkshire": {
+                "AAPL": 40.0, "AXP": 12.5, "BAC": 10.5, "KO": 9.0, "CVX": 8.0, "OXY": 5.0
+            },
+            "NPS": {
+                "MSFT": 6.5, "AAPL": 6.2, "NVDA": 5.8, "AMZN": 4.5, "GOOGL": 3.8, "META": 3.2
+            }
+        }
+        return whale_data
+    except Exception as e:
+        st.error(f"데이터 로드 중 오류 발생: {e}")
+        return None
+
+# ---------------------------------------------------------
+# 2. 메인 실행부
+# ---------------------------------------------------------
+if __name__ == "__main__":
+    # [A] 기존 상단 대시보드 영역 (Market Sentiment, Worst Asset 등)
+
+    # ---------------------------------------------------------
+    # [B] Whale Tracking 영역 (들여쓰기 없이 벽에 붙여서 작성)
+    # ---------------------------------------------------------
+
+    st.write("")  # 상단 지표와의 시각적 간격 확보
+
+    with st.container():
+        st.markdown("---")
+        st.markdown("<h2 style='text-align: center;'>🐳 거물들의 포트폴리오 (Whale Tracking)</h2>", unsafe_allow_html=True)
+        st.write("")
+
+        # [해결점] 여기서 위에서 정의한 함수를 정확한 이름으로 호출합니다.
+        whales = get_whale_portfolio()
+
+        if whales:
+            col_w1, col_w2 = st.columns(2)
+
+            with col_w1:
+                st.markdown("<h4 style='text-align: center;'>🇺🇸 Berkshire Hathaway</h4>", unsafe_allow_html=True)
+                df_bh = pd.DataFrame(list(whales["Berkshire"].items()), columns=["Ticker", "Weight"])
+                fig_bh = px.pie(df_bh, values="Weight", names="Ticker", hole=0.4, color_discrete_sequence=px.colors.sequential.RdBu)
+                fig_bh.update_layout(height=400, margin=dict(t=20, b=80, l=20, r=20), showlegend=True,
+                                    legend=dict(orientation="h", yanchor="bottom", y=-0.4, xanchor="center", x=0.5))
+                st.plotly_chart(fig_bh, use_container_width=True, key="bh_final_chart")
+                st.dataframe(df_bh.set_index("Ticker").T, use_container_width=True)
+
+            with col_w2:
+                st.markdown("<h4 style='text-align: center;'>🇰🇷 National Pension Service</h4>", unsafe_allow_html=True)
+                df_nps = pd.DataFrame(list(whales["NPS"].items()), columns=["Ticker", "Weight"])
+                fig_nps = px.pie(df_nps, values="Weight", names="Ticker", hole=0.4, color_discrete_sequence=px.colors.sequential.Mint)
+                fig_nps.update_layout(height=400, margin=dict(t=20, b=80, l=20, r=20), showlegend=True,
+                                     legend=dict(orientation="h", yanchor="bottom", y=-0.4, xanchor="center", x=0.5))
+                st.plotly_chart(fig_nps, use_container_width=True, key="nps_final_chart")
+                st.dataframe(df_nps.set_index("Ticker").T, use_container_width=True)
+
 # =========================
 # 📌 자산 정의
 # =========================
@@ -310,39 +381,38 @@ if not macro_growth.empty:
     # 3. 레이아웃 설정 (확대 고정 및 너비 최적화)
     fig2.update_layout(
         template="plotly_dark",
-        # [수정] 다시 zoom으로 설정하되, 모바일에서 튀는 현상을 막기 위해 설정을 보강합니다.
-        dragmode="zoom", 
+        # [수정] 기본 동작을 '확대'가 아닌 '이동(Pan)'으로 설정 (모바일 드래그용)
+        dragmode="pan",
         height=650,
         uirevision='constant',
         margin=dict(l=30, r=130, t=80, b=50),
         showlegend=True,
         legend=dict(
-            orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1,
+            orientation="h",
+            yanchor="bottom",
+            y=1.02,
+            xanchor="right",
+            x=1,
             font=dict(size=11)
         ),
         xaxis=dict(
             showgrid=False,
-            # [추가] 축 고정(fixedrange)을 False로 두어야 터치 줌이 먹힙니다.
-            fixedrange=False,
+            # [추가] 고정 범위 설정이 아닌 유동적 범위를 위해 fixedrange 해제 (기본값)
             range=[macro_growth.index, macro_growth.index[-1] + pd.Timedelta(days=15)]
         ),
         yaxis=dict(
             zeroline=True,
             zerolinecolor="rgba(255,255,255,0.2)",
             title="수익률/변화율 (%)",
-            fixedrange=False # Y축도 터치로 확대 가능하게 설정
+            fixedrange=False  # Y축도 자유롭게 확대/축소 가능하게 설정
         )
     )
 
     st.plotly_chart(fig2, use_container_width=True, config={
-        "scrollZoom": True,           # 두 손가락 줌 활성화
-        "displayModeBar": True,       # 모바일에서 확대 후 리셋을 위해 도구모음 표시
-        "modeBarButtonsToRemove": ["select2d", "lasso2d"],
-        "displaylogo": False,
-        "doubleClick": "reset",       # [추가] 모바일에서 차트가 꼬이면 더블 탭으로 리셋
-        "showTips": False,            # 모바일에서 툴팁 방해 제거
-        "responsive": True,
-        # 터치 감도를 위해 'scrollZoom'을 켜두고 드래그 모드를 조정하는 것이 핵심입니다.
+        "scrollZoom": True,  # 마우스 휠 및 터치패드 줌 활성화
+        "displayModeBar": True,  # 상단 도구 모음 표시 (필요시 확대/축소 리셋 가능)
+        "modeBarButtonsToRemove": ["select2d", "lasso2d"],  # 불필요한 선택 도구 제거
+        "responsive": True  # 화면 크기 변화에 대응
     })
 
 # =========================
@@ -365,22 +435,44 @@ if not macro_growth.empty:
 
     # 📊 섹터 및 종목 매핑 (기존 유지)
     sector_map = {
-        "반도체": {"tickers": ["005930.KS", "000660.KS", "NVDA", "TSM", "INTC", "AMD"],
-                "names": ["삼성전자", "SK하이닉스", "엔비디아", "TSMC", "인텔", "AMD"]},
-        "자동차": {"tickers": ["005380.KS", "000270.KS", "TSLA", "F"],
-                "names": ["현대차", "기아", "테슬라", "포드 모터"]},
-        "방산": {"tickers": ["012450.KS", "272210.KS", "003490.KS", "LMT", "PLTR"],
-               "names": ["한화에어로스페이스", "한화시스템", "대한항공", "록히드마틴", "팔란티어"]},
-        "소프트웨어": {"tickers": ["035420.KS", "035720.KS", "MSFT", "GOOGL", "GOOG", "META", "ORCL"],
-                  "names": ["NAVER", "카카오", "마이크로소프트", "구글(알파벳 Class A)", "구글(알파벳 Class C)", "메타", "오라클"]},
-        "우주항공": {"tickers": ["047810.KS", "012450.KS", "003490.KS", "079550.KS", "RKLB"],
-                 "names": ["한국항공우주", "한화에어로스페이스", "대한항공", "LIG넥스원", "로켓랩"]},
-        "해운/유통": {"tickers": ["042660.KS", "011200.KS", "005880.KS", "000120.KS", "AMZN", "WMT", "CPNG", "GD"],
-                  "names": ["한화오션", "HMM", "대한해운", "CJ대한통운", "아마존닷컴", "월마트", "쿠팡", "제너럴 다이내믹스"]},
-        "에너지": {"tickers": ["015760.KS", "298040.KS", "034020.KS", "010120.KS", "229640.KS", "267260.KS"],
-                "names": ["한국전력", "효성중공업", "두산에너빌리티", "LS ELECTRIC", "LS에코에너지", "HD현대일렉트릭"]},
-        "건설": {"tickers": ["000720.KS", "028050.KS", "028260.KS", "006360.KS"],
-               "names": ["현대건설", "DL이앤씨", "삼성물산", "GS건설"]}
+        "반도체": {"tickers": ["005930.KS", "000660.KS","058470.KS", "042700.KS", "NVDA", "TSM", "INTC", "AMD", "AVGO", "ASML", "MU", ],
+                "names": ["삼성전자", "SK하이닉스", "리노공업", "한미반도체", "엔비디아", "TSMC", "인텔", "AMD", "브로드컴", "ASML 홀딩 ADR", "마이크론 테크놀로지"]},
+
+        "자동차": {"tickers": ["005380.KS", "000270.KS", "TSLA", "F","GM", "Lucid", "TM"],
+                "names": ["현대차", "기아", "테슬라", "포드 모터","제너럴 모터스", "루시드 그룹", "토요타자동차 ADR"]},
+
+        "방산": {"tickers": ["012450.KS", "272210.KS", "003490.KS", "047810.KS", "LMT", "PLTR", "RTX", "NOC", "BA", "GD"],
+               "names": ["한화에어로스페이스", "한화시스템", "대한항공", "한국항공우주", "록히드마틴", "팔란티어", "RTX", "노스롭 그루만", "보잉", "제너럴 다이내믹스"]},
+
+        "소프트웨어/AI": {"tickers": ["035420.KS", "035720.KS", "MSFT", "GOOGL", "GOOG", "META", "ORCL", "PLTR", "CRM", "ADBE"],
+                  "names": ["NAVER", "카카오", "마이크로소프트", "구글(알파벳 Class A)", "구글(알파벳 Class C)", "메타", "오라클", "팔란티어", "세일즈포스", "어도비"]},
+
+        "우주항공": {"tickers": ["047810.KS", "012450.KS", "003490.KS", "079550.KS", "099320.KS", "211270.KS", "RKLB", "ASTS", "LMT", "BA"],
+                 "names": ["한국항공우주", "한화에어로스페이스", "대한항공", "LIG넥스원", "쎄트렉아이", "AP위성", "로켓랩", "AST 스페이스모바일", "록히드마틴", "보잉"]},
+
+        "해운/유통": {"tickers": ["042660.KS", "011200.KS", "005880.KS", "000120.KS", "FDX", "UPS", "AMZN", "WMT", "CPNG", "GD"],
+                  "names": ["한화오션", "HMM", "대한해운", "CJ대한통운", "페덱스", "UPS", "아마존닷컴", "월마트", "쿠팡", "제너럴 다이내믹스"]},
+
+        "에너지": {"tickers": ["015760.KS", "009830.KS", "298040.KS", "034020.KS", "010120.KS", "229640.KS", "267260.KS", "XOM", "NEE", "ENPH", "CVX"],
+                "names": ["한국전력", "한화솔루션", "효성중공업", "두산에너빌리티", "LS ELECTRIC", "LS에코에너지", "HD현대일렉트릭", "엑슨 모빌", "넥스트에라 에너지", "인페이즈 에너지", "셰브론"]},
+
+        "건설": {"tickers": ["000720.KS", "028050.KS", "028260.KS", "006360.KS", "047040.KS", "CAT", "VMC", "PWR", "ACM"],
+               "names": ["현대건설", "DL이앤씨", "삼성물산", "GS건설", "대우건설", "캐터필러", "벌칸 머티리얼스", "콴타 서비스", "애이콤"]},
+
+        "휴머노이드 로봇": {"tickers": ["277810.KS", "454910.KS", "388720.KS", "108490.KS", "011210.KS", "NVDA", "TSLA", "ISRG", "ROK"],
+               "names": ["레인보우로보틱스", "두산로보틱스", "유일로보틱스", "로보티즈", "현대위아", "엔비디아", "테슬라", "인튜이티브 서지컬", "로크웰 오토메이션"]},
+
+        "식료품/음식료": {
+            "tickers": ["004370.KS", "271560.KS", "003230.KS", "097950.KS", "280360.KS", "KO", "PEP", "MDLZ", "COST", "MKC"],
+            "names": ["농심", "오리온", "삼양식품", "CJ제일제당", "롯데웰푸드", "코카콜라", "펩시코", "몬덜리즈 인터내셔널", "코스트코 홀세일", "맥코믹 앤 컴퍼니 무의결권주"]},
+
+        "의약/바이오": {
+            "tickers": ["207940.KS", "068270.KS", "000100.KS", "326030.KS", "196170.KS", "LLY", "NVO", "JNJ", "PFE", "AMGN"],
+            "names": ["삼성바이오로직스", "셀트리온", "유한양행", "SK바이오팜", "알테오젠", "일라이 릴리", "노보 노디스크 ADR", "존슨앤드존슨", "화이자", "암젠"]},
+
+        "여행/레저/소비": {
+            "tickers": ["008770.KS", "039130.KS", "034230.KS", "035250.KS", "ABNB", "BKNG", "DIS", "MAR", "H", "CCL"],
+            "names": ["호텔신라", "하나투어", "파라다이스", "강원랜드", "에어비앤비", "부킹 홀딩스", "월트디즈니", "메리어트 인터내셔널", "하얏트 호텔", "카니발"]},
     }
 
     # 📥 데이터 다운로드 (종목 + 일자별 환율)
@@ -725,7 +817,6 @@ if not macro_growth.empty:
 
     # 실행 시 (데이터 로드 후 적절한 위치에서 호출)
     render_correlation_analysis(data.drop(columns=["USDKRW"]))
-    
 
     # =========================================================
     # 📈 [보강] 도미넌스 & 실시간 상세 리포트
@@ -992,6 +1083,8 @@ with summary_col4:
     worst_asset = row_growth.idxmin()
     st.metric("Worst Asset", worst_asset, delta=f"{row_growth[worst_asset]:.2f}%", delta_color="inverse")
 
+
+
 # =========================
 # 📰 5. 뉴스 분석 (링크 포함)
 # =========================
@@ -1183,7 +1276,7 @@ def get_naver_realtime_api(codes):
 
 # --- Streamlit UI 레이아웃 ---
 st.set_page_config(page_title="국장 실시간 시세 검증", layout="wide")
-st.title("🎯 국장 실시간 시세 & 데이터 검증 (30초 자동 갱신)")
+st.title("🎯 국장 실시간 시세 & 데이터 검증")
 
 # 마지막으로 성공한 데이터를 세션에 저장 (API 실패 시 화면 유지용)
 if "last_data" not in st.session_state:
@@ -1243,6 +1336,7 @@ while True:
     # 30초 대기 후 리런
     time.sleep(120)
     st.rerun()
+
 
 # =========================
 # 🔚 Footer
