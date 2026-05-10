@@ -471,13 +471,84 @@ if not macro_growth.empty:
             "names": ["호텔신라", "하나투어", "파라다이스", "강원랜드", "에어비앤비", "부킹 홀딩스", "월트디즈니", "메리어트 인터내셔널", "하얏트 호텔", "카니발"]},
     }
 
+    st.sidebar.markdown("## 📅 데이터 조회 설정")
+
+    # 1. 연/월/일 드롭다운 (사이드바 배치)
+    available_dates = data.index.unique()
+
+    with st.sidebar:
+        # 연도 선택
+        years = sorted(available_dates.year.unique(), reverse=True)
+        sel_y = st.selectbox("Year", options=years, index=0, key="sb_year")
+
+        # 월 선택 (선택된 연도에 해당하는 월만 추출)
+        months = sorted(available_dates[available_dates.year == sel_y].month.unique())
+        default_m_idx = len(months) - 1
+        sel_m = st.selectbox("Month", options=months, index=default_m_idx, key="sb_month")
+
+        # 일 선택 (선택된 연도/월에 해당하는 일만 추출)
+        days = sorted(available_dates[(available_dates.year == sel_y) & (available_dates.month == sel_m)].day.unique())
+        default_d_idx = len(days) - 1
+        sel_d = st.selectbox("Day", options=days, index=default_d_idx, key="sb_day")
+
+        st.sidebar.divider()  # 구분선
+
+    # 2. 날짜 매칭 로직 (기존 로직 유지)
+    target_date = available_dates[(available_dates.year == sel_y) &
+                                  (available_dates.month == sel_m) &
+                                  (available_dates.day == sel_d)][-1]
+
+    # 실제 데이터상의 유효 날짜 인덱스 확보
+    idx_list = data.index.get_indexer([target_date], method='pad')[0]
+    date_idx = int(idx_list)  # 숫자로 확실하게 변환
+
+    # 2. 이제 get_loc이 정상적으로 작동합니다.
+    actual_valid_date = data.index[date_idx]
+
+    # 3. 메인 화면 상단에 현재 조회 중인 날짜 표시 (선택 사항)
+    st.markdown(f"### 📊 분석 기준일: `{actual_valid_date.strftime('%Y-%m-%d')}`")
+
+
     # (B) 기간 설정 UI
     period = st.selectbox("기간설정", ["7일", "1개월", "6개월", "1년"], key="sector_period_selector")
+
+    # 2. 기준일(actual_valid_date)로부터 시작일 계산
+    # actual_valid_date는 사이드바에서 선택된 날짜 값입니다.
+    if period == "7일":
+        start_date = actual_valid_date - pd.DateOffset(days=7)
+    elif period == "1개월":
+        start_date = actual_valid_date - pd.DateOffset(months=1)
+    elif period == "6개월":
+        start_date = actual_valid_date - pd.DateOffset(months=6)
+    elif period == "1년":
+        start_date = actual_valid_date - pd.DateOffset(years=1)
+    else:
+        start_date = actual_valid_date - pd.DateOffset(days=7)
+
+    # 3. yfinance용 period 문자열 매핑 (데이터를 넉넉히 받아오기 위함)
+    # 시작일보다 조금 더 여유 있게 데이터를 받아와야 이동평균선 등을 계산할 때 에러가 안 납니다.
     period_days_map = {"7일": "1mo", "1개월": "3mo", "6개월": "1y", "1년": "2y"}
     yf_period = period_days_map[period]
 
-    # (C) 데이터 호출 (정의된 sector_map 사용)
+    # 4. 데이터 호출 (sector_map은 상단에 정의된 전역 변수 사용)
+    # s_map_global = globals().get('sector_map', {}) # 필요시 사용
     growth_sector, data_sector_krw = get_processed_sector_data(sector_map, yf_period)
+
+    # 5. [중요] 호출된 데이터에서 사용자가 선택한 기간만큼만 슬라이싱
+    # 이렇게 해야 차트가 선택한 날짜까지만 깔끔하게 나옵니다.
+    try:
+        if growth_sector is not None:
+            # .loc[시작일:종료일]을 사용하여 선택한 기간만큼만 추출합니다.
+            # 데이터가 없는 날짜일 수 있으므로 slice를 안전하게 가져옵니다.
+            growth_sector = growth_sector.loc[growth_sector.index >= start_date]
+            growth_sector = growth_sector.loc[growth_sector.index <= actual_valid_date]
+
+        if data_sector_krw is not None:
+            data_sector_krw = data_sector_krw.loc[data_sector_krw.index >= start_date]
+            data_sector_krw = data_sector_krw.loc[data_sector_krw.index <= actual_valid_date]
+
+    except Exception as e:
+        st.warning(f"데이터 슬라이싱 중 알림: {e}")
 
     # (D) 차트 출력
     if not growth_sector.empty:
@@ -539,42 +610,7 @@ if not macro_growth.empty:
     # =========================
     # 📅 날짜 선택 및 상호 동기화 로직
     # =========================
-    st.sidebar.markdown("## 📅 데이터 조회 설정")
 
-    # 1. 연/월/일 드롭다운 (사이드바 배치)
-    available_dates = data.index.unique()
-
-    with st.sidebar:
-        # 연도 선택
-        years = sorted(available_dates.year.unique(), reverse=True)
-        sel_y = st.selectbox("Year", options=years, index=0, key="sb_year")
-
-        # 월 선택 (선택된 연도에 해당하는 월만 추출)
-        months = sorted(available_dates[available_dates.year == sel_y].month.unique())
-        default_m_idx = len(months) - 1
-        sel_m = st.selectbox("Month", options=months, index=default_m_idx, key="sb_month")
-
-        # 일 선택 (선택된 연도/월에 해당하는 일만 추출)
-        days = sorted(available_dates[(available_dates.year == sel_y) & (available_dates.month == sel_m)].day.unique())
-        default_d_idx = len(days) - 1
-        sel_d = st.selectbox("Day", options=days, index=default_d_idx, key="sb_day")
-
-        st.sidebar.divider()  # 구분선
-
-    # 2. 날짜 매칭 로직 (기존 로직 유지)
-    target_date = available_dates[(available_dates.year == sel_y) &
-                                  (available_dates.month == sel_m) &
-                                  (available_dates.day == sel_d)][-1]
-
-    # 실제 데이터상의 유효 날짜 인덱스 확보
-    idx_list = data.index.get_indexer([target_date], method='pad')[0]
-    date_idx = int(idx_list)  # 숫자로 확실하게 변환
-
-    # 2. 이제 get_loc이 정상적으로 작동합니다.
-    actual_valid_date = data.index[date_idx]
-
-    # 3. 메인 화면 상단에 현재 조회 중인 날짜 표시 (선택 사항)
-    st.markdown(f"### 📊 분석 기준일: `{actual_valid_date.strftime('%Y-%m-%d')}`")
 
     # 날짜가 바뀌었을 때 섹터 상세창을 초기화하고 싶다면 아래 주석을 해제하세요.
     # if "last_date" not in st.session_state or st.session_state.last_date != actual_valid_date:
