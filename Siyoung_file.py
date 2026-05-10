@@ -562,26 +562,69 @@ if not macro_growth.empty:
                 if i + j < len(sectors_list):
                     sector_name = sectors_list[i + j]
                     sector_color = colors[(i + j) % len(colors)]
-                    with row_cols[j]:
-                        fig = go.Figure()
-                        fig.add_trace(go.Scatter(
-                            x=growth_sector.index,
-                            y=growth_sector[sector_name],
-                            mode="lines",
-                            line=dict(width=3, color=sector_color),
-                            name=sector_name,
-                            hovertemplate="<b>%{x|%y.%m.%d}</b><br>지수: %{y:.2f}<extra></extra>"
-                        ))
-                        fig.update_layout(
-                            title=f"📈 {sector_name} 수익률",
-                            height=300,
-                            margin=dict(l=40, r=20, t=50, b=40),
-                            xaxis=dict(tickformat="%y.%m.%d", showgrid=True),
-                            yaxis=dict(showgrid=True),
-                            plot_bgcolor="rgba(0,0,0,0)",
-                            showlegend=False
-                        )
-                        st.plotly_chart(fig, use_container_width=True, key=f"chart_fx_{sector_name}")
+
+                    # 1. 해당 섹터 데이터 추출 및 결측치 제거
+                    raw_series = growth_sector[sector_name].dropna()
+
+                    # 데이터가 2개 이상 있어야 '변화'를 그릴 수 있습니다.
+                    if len(raw_series) > 1:
+                        base_val = float(raw_series.values[0])  # 첫 값을 확실하게 실수(float)로 변환
+
+                        # 기준값이 0이면 나누기가 안 되므로 아주 작은 값으로 대체하거나 스킵
+                        if base_val == 0:
+                            base_val = 1e-9
+
+                            # 누적 수익률 계산
+                        cumulative_returns = (raw_series / base_val - 1) * 100
+
+                        with row_cols[j]:
+                            fig = go.Figure()
+                            fig.add_trace(go.Scatter(
+                                x=cumulative_returns.index,
+                                y=cumulative_returns.values,
+                                mode="lines+markers",  # 데이터 포인트가 적을 땐 마커를 쓰는 게 확실합니다
+                                line=dict(width=3, color=sector_color),
+                                fill='tozeroy',
+                                fillcolor=f"rgba({int(sector_color[1:3], 16)}, {int(sector_color[3:5], 16)}, {int(sector_color[5:7], 16)}, 0.1)",
+                                hovertemplate="<b>%{x|%y.%m.%d}</b><br>수익률: %{y:.2f}%<extra></extra>"
+                            ))
+
+                            # Y축 범위를 데이터에 맞춰 자동 조절 (일직선 방지)
+                            y_min = cumulative_returns.min()
+                            y_max = cumulative_returns.max()
+                            # 위아래로 약간의 여백(0.5%)을 강제로 줍니다.
+                            y_range = [y_min - 0.5, y_max + 0.5]
+
+                            fig.update_layout(
+                                title=f"📈 {sector_name} 누적 수익률 (%)",
+                                height=300,
+                                margin=dict(l=40, r=20, t=50, b=40),
+                                xaxis=dict(tickformat="%y.%m.%d", showgrid=True),
+                                yaxis=dict(
+                                    range=y_range,  # 강제 범위 설정으로 미세한 변화도 보이게 함
+                                    showgrid=True,
+                                    zeroline=True,
+                                    zerolinewidth=2,
+                                    zerolinecolor='rgba(0,0,0,0.3)',
+                                    ticksuffix="%"
+                                ),
+                                plot_bgcolor="rgba(0,0,0,0)",
+                                showlegend=False
+                            )
+                            st.plotly_chart(fig, use_container_width=True, key=f"chart_cum_fix_{sector_name}")
+
+                            with st.expander(f"🔍 {sector_name} 구성종목 확인"):
+                                # sector_map에서 해당 섹터의 종목명과 티커를 가져옴
+                                if sector_name in sector_map:
+                                    names = sector_map[sector_name]["names"]
+                                    codes = sector_map[sector_name]["tickers"]
+                                    for name, code in zip(names, codes):
+                                        st.write(f"- {name} ({code})")
+                                else:
+                                    st.write("구성종목 정보가 없습니다.")
+                    else:
+                        with row_cols[j]:
+                            st.warning(f"{sector_name}: 분석할 데이터가 부족합니다.")
 
                         with st.expander(f"🔍 {sector_name} 구성종목 확인"):
                             names = sector_map[sector_name]["names"]
