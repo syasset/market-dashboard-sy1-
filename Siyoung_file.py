@@ -539,38 +539,42 @@ if not macro_growth.empty:
     # =========================
     # 📅 날짜 선택 및 상호 동기화 로직
     # =========================
-    st.markdown("## 📅 기간별 AI 시장분석")
+    st.sidebar.markdown("## 📅 데이터 조회 설정")
 
-    if "clicked_sector" not in st.session_state:
-        st.session_state.clicked_sector = None
-
+    # 1. 연/월/일 드롭다운 (사이드바 배치)
     available_dates = data.index.unique()
 
-    # 1. 연/월/일 드롭다운 기능 (기존 로직 유지)
-    col_y, col_m, col_d = st.columns(3)
-
-    with col_y:
+    with st.sidebar:
+        # 연도 선택
         years = sorted(available_dates.year.unique(), reverse=True)
-        sel_y = st.selectbox("Year", options=years, index=0)
+        sel_y = st.selectbox("Year", options=years, index=0, key="sb_year")
 
-    with col_m:
+        # 월 선택 (선택된 연도에 해당하는 월만 추출)
         months = sorted(available_dates[available_dates.year == sel_y].month.unique())
         default_m_idx = len(months) - 1
-        sel_m = st.selectbox("Month", options=months, index=default_m_idx)
+        sel_m = st.selectbox("Month", options=months, index=default_m_idx, key="sb_month")
 
-    with col_d:
+        # 일 선택 (선택된 연도/월에 해당하는 일만 추출)
         days = sorted(available_dates[(available_dates.year == sel_y) & (available_dates.month == sel_m)].day.unique())
         default_d_idx = len(days) - 1
-        sel_d = st.selectbox("Day", options=days, index=default_d_idx)
+        sel_d = st.selectbox("Day", options=days, index=default_d_idx, key="sb_day")
 
-    # 선택된 날짜 설정 및 실제 데이터 매칭
+        st.sidebar.divider()  # 구분선
+
+    # 2. 날짜 매칭 로직 (기존 로직 유지)
     target_date = available_dates[(available_dates.year == sel_y) &
                                   (available_dates.month == sel_m) &
                                   (available_dates.day == sel_d)][-1]
 
-    # [수정] actual_valid_date와 date_idx를 여기서 명확히 정의합니다.
-    actual_valid_date = data.index[data.index.get_indexer([target_date], method='pad')[0]]
-    date_idx = data.index.get_loc(actual_valid_date)  # <--- NameError 해결 포인트
+    # 실제 데이터상의 유효 날짜 인덱스 확보
+    idx_list = data.index.get_indexer([target_date], method='pad')[0]
+    date_idx = int(idx_list)  # 숫자로 확실하게 변환
+
+    # 2. 이제 get_loc이 정상적으로 작동합니다.
+    actual_valid_date = data.index[date_idx]
+
+    # 3. 메인 화면 상단에 현재 조회 중인 날짜 표시 (선택 사항)
+    st.markdown(f"### 📊 분석 기준일: `{actual_valid_date.strftime('%Y-%m-%d')}`")
 
     # 날짜가 바뀌었을 때 섹터 상세창을 초기화하고 싶다면 아래 주석을 해제하세요.
     # if "last_date" not in st.session_state or st.session_state.last_date != actual_valid_date:
