@@ -1182,6 +1182,123 @@ for i, (kr_name, en_keyword) in enumerate(global_keywords.items()):
                     st.markdown(f"🔗 [기사 원문 읽기]({news['link']})")
         st.markdown("---")
 
+import numpy as np
+
+
+def draw_danger_chart(pattern_type):
+    # 1. 패턴별 맞춤 가격 데이터 (30개씩)
+    if pattern_type == "Head & Shoulders":
+        prices = [100, 105, 110, 105, 115, 125, 115, 105, 110, 103, 95, 90, 88, 85, 83, 82, 81, 80, 79, 78, 77, 76, 75, 74, 73, 72, 71, 70, 69, 68]
+    elif pattern_type == "Dead Cross":
+        prices = [120, 118, 115, 112, 110, 108, 105, 103, 100, 98, 95, 92, 88, 85, 82, 80, 78, 75, 72, 70, 68, 65, 63, 60, 58, 55, 53, 50, 48, 45]
+    elif pattern_type == "Double Top":
+        prices = [90, 110, 125, 110, 95, 110, 125, 110, 90, 85, 80, 78, 75, 73, 70, 68, 65, 63, 61, 60, 58, 55, 53, 50, 48, 46, 44, 42, 40, 38]
+    elif pattern_type == "Bear Flag":
+        prices = [90, 110, 125, 110, 95, 110, 125, 110, 90, 85, 80, 78, 75, 73, 70, 68, 65, 63, 61, 60, 58, 55, 53, 50, 48, 46, 44, 42, 40, 38]
+    elif pattern_type == "Descending Triangle":
+        prices = [120, 100, 110, 100, 105, 100, 102, 100, 95, 85, 75, 70, 68, 65, 63, 60, 58, 55, 53, 50, 48, 45, 43, 40, 38, 35, 33, 30, 28, 25]
+    elif pattern_type == "Dead Cat Bounce":
+        prices = [130, 100, 70, 50, 40, 55, 65, 55, 45, 35, 30, 28, 26, 24, 22, 20, 18, 16, 14, 12, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1]
+    else:
+        prices = [100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100]*30
+
+    x_range = list(range(len(prices)))
+    df = pd.DataFrame({'Close': prices})
+
+    # 2. 보조지표 계산 (데이터 부족으로 끊기는 현상 방지)
+    df['MA5'] = df['Close'].rolling(window=5, min_periods=1).mean()
+    df['MA20'] = df['Close'].rolling(window=20, min_periods=1).mean()
+    df['Std'] = df['Close'].rolling(window=20, min_periods=1).std()
+    df['Upper'] = df['MA20'] + (df['Std'] * 2)
+    df['Lower'] = df['MA20'] - (df['Std'] * 2)
+
+    fig = go.Figure()
+
+    # (1) 볼린저 밴드 (배경 그림자)
+    fig.add_trace(go.Scatter(x=x_range, y=df['Upper'].tolist(), line=dict(width=0), hoverinfo='skip', showlegend=False))
+    fig.add_trace(go.Scatter(x=x_range, y=df['Lower'].tolist(), line=dict(width=0), fill='tonexty',
+                             fillcolor='rgba(128, 128, 128, 0.15)', hoverinfo='skip', showlegend=False))
+
+    # (2) 이동평균선
+    fig.add_trace(go.Scatter(x=x_range, y=df['MA5'].tolist(), line=dict(color='#FF4B4B', width=2), name='MA5'))
+    fig.add_trace(go.Scatter(x=x_range, y=df['MA20'].tolist(), line=dict(color='#FFA500', width=2), name='MA20'))
+
+    # (3) 캔들스틱 (봉 두께 및 색상 최적화)
+    fig.add_trace(go.Candlestick(
+        x=x_range,
+        open=[p + (1 if i % 2 == 0 else -1) for i, p in enumerate(prices)],
+        high=[p + 2 for p in prices],
+        low=[p - 2 for p in prices],
+        close=prices,
+        increasing_line_color='#FF4B4B', increasing_fillcolor='#FF4B4B',
+        decreasing_line_color='#007BFF', decreasing_fillcolor='#007BFF',  # 하락봉 파란색
+        showlegend=False
+    ))
+
+    # (4) 레이아웃 설정
+    fig.update_layout(
+        height=280,
+        margin=dict(l=5, r=5, t=5, b=5),
+        xaxis=dict(visible=False, rangeslider=dict(visible=False)),
+        yaxis=dict(visible=False),
+        paper_bgcolor='rgba(0,0,0,0)',
+        plot_bgcolor='rgba(0,0,0,0)',
+        hovermode='x'
+    )
+    return fig
+
+st.title("⚠️ AI 기술적 분석 가이드: 하락 주의 패턴")
+st.markdown("현재 시장 상황에서 발생할 수 있는 주요 하락 패턴들을 분석합니다.")
+st.divider()
+
+# 1. 표시할 패턴 리스트와 한글 제목 정의
+patterns_info = {
+    "Head & Shoulders": {
+        "title": "1. 헤드앤숄더",
+        "desc": "고점에서 세 개의 봉우리가 형성되는 패턴입니다.",
+        "risk": "상승세가 꺾이고 강력한 하락세로 전환될 때 나타나는 가장 대표적인 위험 신호입니다."
+    },
+    "Dead Cross": {
+        "title": "2. 데드크로스",
+        "desc": "단기 이평선(MA5)이 장기 이평선(MA20)을 하향 돌파합니다.",
+        "risk": "평균 가격 하락 속도가 가팔라지며 대세 하락 국면에 진입했음을 의미합니다."
+    },
+    "Double Top": {
+        "title": "3. 다중 천정형",
+        "desc": "두 번의 고점 돌파 시도가 모두 실패한 모습입니다.",
+        "risk": "강력한 저항 벽을 확인한 매수 세력이 포기하며 실망 매물이 쏟아질 수 있습니다."
+    },
+    "Bear Flag": {
+        "title": "4. 베어 플래그",
+        "desc": "급락 후 잠시 횡보하며 깃발 모양을 만드는 패턴입니다.",
+        "risk": "추가 하락을 위한 잠시 숨 고르기일 뿐, 깃발 하단을 이탈하면 다시 급락합니다."
+    },
+    "Descending Triangle": {
+        "title": "5. 하락 삼각수렴",
+        "desc": "저점은 일정하지만 고점은 계속 낮아지는 형태입니다.",
+        "risk": "매도 압력이 점차 강해지고 있으며, 지지선 붕괴 시 투매가 발생할 확률이 높습니다."
+    },
+    "Dead Cat Bounce": {
+        "title": "6. 데드 캣 바운스",
+        "desc": "폭락 중 나타나는 일시적이고 가파른 반등입니다.",
+        "risk": "추세 전환이 아닌 '가짜 반등'입니다. 속아서 추격 매수 시 큰 손실을 볼 수 있습니다."
+    }
+}
+
+# 2. 3열(Column) 생성
+cols = st.columns(3)
+
+# 3. 반복문을 돌며 열마다 차트 배치
+for idx, (p_type, info) in enumerate(patterns_info.items()):
+    with cols[idx % 3]:
+        st.subheader(info["title"])
+        fig = draw_danger_chart(p_type)
+        st.plotly_chart(fig, use_container_width=True, key=f"grid_chart_{idx}", config={'displayModeBar': False})
+
+        # 설명 및 위험 요소 추가
+        st.info(f"🔍 **상황:** {info['desc']}")
+        st.warning(f"⚠️ **위험성:** {info['risk']}")
+        st.divider()
 
 #======= 점검용
 # 1. 대상 종목 및 증권사 코드 설정
@@ -1302,9 +1419,9 @@ while True:
     time.sleep(120)
     st.rerun()
 
-
 # =========================
 # 🔚 Footer
 # =========================
 # actual_date를 위에서 정의한 actual_valid_date로 변경
 st.markdown(f"<div style='text-align: center; color: gray; margin-top: 50px;'>🚀 v2.1 Optimized Dashboard | {actual_valid_date.strftime('%Y-%m-%d')}</div>", unsafe_allow_html=True)
+
