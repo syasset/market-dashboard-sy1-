@@ -14,6 +14,7 @@ import random
 import streamlit as st  # 이 줄이 반드시 있어야 합니다!
 import yfinance as yf
 import pandas as pd
+import numpy as np
 
 st.set_page_config(layout="wide", page_title="AI Financial Dashboard")
 
@@ -1005,9 +1006,77 @@ if not macro_growth.empty:
             else:
                 st.info("선택된 섹터의 종목 데이터를 찾을 수 없습니다.")
 
-
     # 함수 실행
     render_v81_verification_mode()
+
+
+    # =========================================================
+    # 🔗 [독립 실행] 섹터 간 상관관계 및 역상관 분석
+    # =========================================================
+    def render_sector_specific_correlation():
+        # 1. 전역 변수에서 섹터 데이터(growth_sector) 가져오기
+        df_sec = globals().get('growth_sector')
+
+        if df_sec is None or df_sec.empty:
+            st.warning("상관관계 분석을 위한 'growth_sector' 데이터가 로드되지 않았습니다.")
+            return
+
+        st.markdown("---")
+        st.markdown("### 🔗 섹터 간 상관관계 분석 (최근 120일)")
+        st.caption("섹터별 수익률 움직임의 유사성을 분석합니다. -1에 가까울수록 반대로 움직입니다.")
+
+        # 2. 최근 120일 데이터 기준 상관계수 계산
+        # 가격 지수보다 변동성(pct_change) 기준 분석이 더 정확합니다.
+        corr = df_sec.tail(120).pct_change().corr()
+
+        # 3. 레이아웃 분할 (히트맵 | 역상관 리스트)
+        col_a, col_b = st.columns([1.2, 0.8])
+
+        with col_a:
+            fig_corr = px.imshow(
+                corr,
+                text_auto=".2f",
+                aspect="auto",
+                color_continuous_scale="RdBu_r",
+                zmin=-1, zmax=1,
+                title="Sector Correlation Heatmap"
+            )
+            fig_corr.update_layout(height=500, margin=dict(t=50, b=10, l=10, r=10))
+            st.plotly_chart(fig_corr, use_container_width=True)
+
+        with col_b:
+            st.markdown("#### 🔄 서로 반대로 움직이는 섹터")
+
+            # 상관계수 행렬에서 중복 제거 및 자기 자신(1.0) 제외
+            mask = np.triu(np.ones(corr.shape), k=1).astype(bool)
+            sol = corr.where(mask)
+            # 상관계수가 낮은 순(역상관)으로 정렬
+            sorted_corr = sol.unstack().dropna().sort_values()
+
+            # 하위 3개 커플 추출
+            low_corr_pairs = sorted_corr.head(3)
+
+            if not low_corr_pairs.empty:
+                for (s1, s2), val in low_corr_pairs.items():
+                    # 역상관 정도에 따른 색상 강조
+                    box_color = "#E74C3C" if val < 0 else "#F1C40F"
+                    st.markdown(f"""
+                        <div style="background-color:rgba(231, 76, 60, 0.1); border-left: 5px solid {box_color}; padding: 10px; border-radius: 5px; margin-bottom: 10px;">
+                            <small style="color:gray;">상관도: {val:.2f}</small><br>
+                            <b style="font-size:16px;">{s1} ↔ {s2}</b>
+                        </div>
+                    """, unsafe_allow_html=True)
+
+                st.info("💡 위 섹터들은 한쪽이 오를 때 다른 쪽은 내리는 경향이 있어 리스크 분산에 유리합니다.")
+            else:
+                st.write("현재 뚜렷한 역상관 관계가 포착되지 않았습니다.")
+
+
+    # ---------------------------------------------------------
+    # 호출부: 기존 함수들 밖에서 실행하세요
+    # ---------------------------------------------------------
+    render_sector_specific_correlation()
+
 
     # =========================
     # 📈 4. AI 분석 리포트 & 기상도
@@ -1343,124 +1412,6 @@ for idx, (p_type, info) in enumerate(patterns_info.items()):
         st.warning(f"⚠️ **위험성:** {info['risk']}")
         st.divider()
 
-#======= 점검용
-# 1. 대상 종목 및 증권사 코드 설정
-target_stocks = {
-    "삼성전자": "005930",
-    "현대차": "005380",
-    "LS": "006260"
-}
-
-# 1. 대상 종목 설정 (삼성전자, 현대차, LS)
-TARGET_STOCKS = {
-    "삼성전자": "005930",
-    "현대차": "005380",
-    "LS": "006260"
-}
-
-
-def get_naver_realtime_api(codes):
-    """
-    네이버 증권 실시간 폴링 API 호출 함수
-    로그인 없이 공용 브라우저 헤더를 사용하여 데이터를 가져옵니다.
-    """
-    code_list = ",".join(codes)
-    url = f"https://polling.finance.naver.com/api/realtime?query=SERVICE_ITEM:{code_list}"
-
-    # 브라우저인 것처럼 보이게 하는 헤더 (차단 방지)
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/116.0.0.0 Safari/537.36"
-    }
-
-    try:
-        response = requests.get(url, headers=headers, timeout=5)
-        response.raise_for_status()
-        data = response.json()
-
-        if data.get('result') and data['result'].get('areas'):
-            items = data['result']['areas']['datas']
-            results = {}
-            for item in items:
-                # API 필드 매핑: nv(현재가), cv(전일대비), cr(등락률), ov(시가), hv(고가), lv(저가), aq(거래량)
-                results[item['nm']] = {
-                    "현재가": item.get('nv', 0),
-                    "전일대비": item.get('cv', 0),
-                    "등락률": item.get('cr', 0.0),
-                    "시가": item.get('ov', 0),
-                    "고가": item.get('hv', 0),
-                    "저가": item.get('lv', 0),
-                    "거래량": item.get('aq', 0)
-                }
-            return results
-        return None
-    except Exception as e:
-        # 에러 발생 시 로그만 출력하고 None 반환
-        print(f"Error fetching data: {e}")
-        return None
-
-
-# --- Streamlit UI 레이아웃 ---
-st.set_page_config(page_title="국장 실시간 시세 검증", layout="wide")
-st.title("🎯 국장 실시간 시세 & 데이터 검증")
-
-# 마지막으로 성공한 데이터를 세션에 저장 (API 실패 시 화면 유지용)
-if "last_data" not in st.session_state:
-    st.session_state.last_data = None
-
-# 실시간 갱신을 위한 빈 컨테이너
-placeholder = st.empty()
-
-# 실행 루프
-while True:
-    # API 데이터 호출
-    current_prices = get_naver_realtime_api(list(TARGET_STOCKS.values()))
-
-    # 데이터 수집 성공 여부에 따른 상태 처리
-    if current_prices:
-        st.session_state.last_data = current_prices
-        status_msg = "✅ 실시간 데이터 동기화 완료"
-        status_color = "green"
-    else:
-        status_msg = "⚠️ 서버 연결 지연 (직전 데이터 유지 중)"
-        status_color = "orange"
-
-    # 화면 렌더링
-    with placeholder.container():
-        now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-        st.markdown(f"**상태:** :{status_color}[{status_msg}] | **업데이트 시각:** {now}")
-
-        if st.session_state.last_data:
-            display_dict = st.session_state.last_data
-
-            # 1. 상단 메트릭 (주요 3종목)
-            cols = st.columns(len(TARGET_STOCKS))
-            for i, name in enumerate(TARGET_STOCKS.keys()):
-                info = display_dict.get(name)
-                if info:
-                    cols[i].metric(
-                        label=name,
-                        value=f"{info['현재가']:,} 원",
-                        delta=f"{info['전일대비']:,} ({info['등락률']}%)"
-                    )
-
-            # 2. 하단 데이터 검증 테이블 (시고저종)
-            st.markdown("---")
-            st.subheader("📊 시고저종 상세 데이터 검증")
-
-            # DataFrame 변환 및 포맷팅
-            v_df = pd.DataFrame(display_dict).T
-            v_df = v_df[["시가", "고가", "저가", "현재가", "거래량"]]
-
-            # 테이블 출력
-            st.table(v_df.style.format("{:,}"))
-
-            st.caption("※ 네이버 금융 API(polling.finance.naver.com)를 직접 호출하여 60초마다 갱신합니다.")
-        else:
-            st.error("데이터를 불러오는 데 실패했습니다. 장 중인지 확인하거나 잠시 후 다시 시도해 주세요.")
-
-    # 30초 대기 후 리런
-    time.sleep(120)
-    st.rerun()
 
 # =========================
 # 🔚 Footer
