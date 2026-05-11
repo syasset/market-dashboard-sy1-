@@ -384,29 +384,42 @@ if not macro_growth.empty:
     # 🏗️ 1. 데이터 로드 및 전처리 (최적화 버전)
     # =========================
     @st.cache_data(ttl=3600)
-    def get_processed_sector_data(sector_map, yf_period):
+    def get_processed_sector_data(sector_map, start_dt, end_dt):
         all_tickers = []
         for v in sector_map.values():
             all_tickers.extend(v["tickers"])
         fx_ticker = "USDKRW=X"
         download_list = list(set(all_tickers + [fx_ticker]))
 
-        # 병렬 다운로드 활성화
-        raw = yf.download(download_list, period=yf_period, progress=False, threads=True)
-        if raw.empty:
+        # [수정] period 대신 정확한 start/end 날짜로 다운로드
+        # start_dt보다 조금 더 여유있게(5일 전) 가져와야 첫날 수익률 계산이 정확합니다.
+        actual_start = (pd.to_datetime(start_dt) - pd.Timedelta(days=5)).strftime('%Y-%m-%d')
+        actual_end = pd.to_datetime(end_dt).strftime('%Y-%m-%d')
+
+        raw = yf.download(download_list, start=actual_start, end=actual_end, progress=False, threads=True)
+
+        if raw.empty or "Close" not in raw:
             return pd.DataFrame(), pd.DataFrame()
 
         # 데이터 정리
         data_all = raw["Close"].ffill().bfill()
+
+        # 멀티인덱스 처리
         if isinstance(data_all.columns, pd.MultiIndex):
             data_all.columns = data_all.columns.get_level_values(1)
+
+        if fx_ticker not in data_all.columns:
+            # 환율 데이터가 없을 경우 최근 환율로 임시 대체하거나 1로 설정
+            data_all[fx_ticker] = 1350.0
 
         fx_history = data_all[fx_ticker]
         pure_stock_data = data_all.drop(columns=[fx_ticker])
 
         # [최적화] 벡터화 환율 연산
         non_kr_cols = [c for c in pure_stock_data.columns if not any(ex in c.upper() for ex in [".KS", ".KQ"])]
-        pure_stock_data[non_kr_cols] = pure_stock_data[non_kr_cols].multiply(fx_history, axis=0)
+        for col in non_kr_cols:
+            if col in pure_stock_data.columns:
+                pure_stock_data[col] = pure_stock_data[col] * fx_history
 
         # 섹터 지수 계산
         sector_df = pd.DataFrame(index=pure_stock_data.index)
@@ -415,9 +428,13 @@ if not macro_growth.empty:
             if valid:
                 sector_df[sector] = pure_stock_data[valid].mean(axis=1)
 
-        # ---------------------------------------------------------
-        # ✅ 핵심 수정: iloc 뒤에 반드시을 붙여야 첫날 기준으로 계산됩니다.
-        # ---------------------------------------------------------
+        # 선택한 시작일 이후 데이터만 필터링하여 반환
+        sector_df = sector_df[sector_df.index >= pd.to_datetime(start_dt)]
+
+        if sector_df.empty:
+            return pd.DataFrame(), pd.DataFrame()
+
+        # 첫 날을 100으로 맞춘 수익률 계산
         growth_sector = (sector_df / sector_df.iloc[0]) * 100
 
         return growth_sector, pure_stock_data
@@ -514,7 +531,6 @@ if not macro_growth.empty:
     period = st.selectbox("기간설정", ["7일", "1개월", "6개월", "1년"], key="sector_period_selector")
 
     # 2. 기준일(actual_valid_date)로부터 시작일 계산
-    # actual_valid_date는 사이드바에서 선택된 날짜 값입니다.
     if period == "7일":
         start_date = actual_valid_date - pd.DateOffset(days=7)
     elif period == "1개월":
@@ -532,13 +548,14 @@ if not macro_growth.empty:
     yf_period = period_days_map[period]
 
     # 4. 데이터 호출 (sector_map은 상단에 정의된 전역 변수 사용)
-    # s_map_global = globals().get('sector_map', {}) # 필요시 사용
-    growth_sector, data_sector_krw = get_processed_sector_data(sector_map, yf_period)
+    # [핵심 수정] get_processed_sector_data 함수에 날짜 범위를 직접 전달
+    with st.spinner('데이터를 불러오는 중...'):
+        growth_sector, data_sector_krw = get_processed_sector_data(sector_map, start_date, actual_valid_date)
 
     # 5. [중요] 호출된 데이터에서 사용자가 선택한 기간만큼만 슬라이싱
     # 이렇게 해야 차트가 선택한 날짜까지만 깔끔하게 나옵니다.
     try:
-        if growth_sector is not None:
+        if growth_sector is not None and not growth_sector.empty:
             # .loc[시작일:종료일]을 사용하여 선택한 기간만큼만 추출합니다.
             # 데이터가 없는 날짜일 수 있으므로 slice를 안전하게 가져옵니다.
             growth_sector = growth_sector.loc[growth_sector.index >= start_date]
