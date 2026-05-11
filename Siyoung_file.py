@@ -17,71 +17,104 @@ import pandas as pd
 import numpy as np
 
 
-@st.dialog("종목 상세 분석", width="large")
+@st.dialog("종목 상세 분석 및 재무 상태", width="large")
 def show_stock_detail(ticker, name, df_krw):
     st.write(f"### {name} ({ticker})")
 
-    if ticker not in df_krw.columns:
-        st.error("데이터를 찾을 수 없습니다.")
-        return
+    tab1, tab2, tab3 = st.tabs(["📈 주가 차트", "📊 분기 실적 요약", "💡 투자 지표"])
 
-    # 1. 실제 유효한 데이터 추출
-    valid_series = df_krw[ticker].dropna()
-    max_days = len(valid_series)
+    # --- 데이터 로드 (분기 데이터 추가) ---
+    @st.cache_data(ttl=86400)
+    def get_financial_info(t_code):
+        try:
+            t = yf.Ticker(t_code)
+            # 분기 손익계산서 (최근 4~5분기 제공)
+            q_fin = t.quarterly_financials
+            info = t.info
+            return q_fin, info
+        except:
+            return None, None
 
-    if max_days < 2:
-        st.warning("분석할 수 있는 시계열 데이터가 부족합니다. (최소 2일 필요)")
-        return
+    q_fin_df, info_dict = get_financial_info(ticker)
 
-    # 2. 슬라이더 설정 (최소값을 2로 낮춰서 웬만한 상황에선 다 나오게 함)
-    # 데이터가 2일뿐이라면 슬라이더가 필요 없으므로 조건 처리
-    if max_days > 2:
-        # 데이터가 30일보다 적으면 전체를 기본값으로, 많으면 30일을 기본값으로
-        default_val = min(30, max_days)
+    # --- 1번 탭: 주가 차트 (기존 유지) ---
+    with tab1:
+        valid_series = df_krw[ticker].dropna()
+        if len(valid_series) > 2:
+            lookback_days = st.slider("조회 기간 설정 (일)", 2, len(valid_series), min(30, len(valid_series)),
+                                      key=f"slider_{ticker}")
+            stock_series = valid_series.iloc[-lookback_days:]
+            stock_growth = (stock_series / stock_series.iloc[0] - 1) * 100
+            fig = go.Figure()
+            fig.add_trace(go.Scatter(x=stock_growth.index, y=stock_growth.values, mode='lines',
+                                     line=dict(width=3, color='#00CC96'), fill='tozeroy',
+                                     fillcolor='rgba(0, 204, 150, 0.1)'))
+            fig.update_layout(template="plotly_dark", height=400, yaxis=dict(ticksuffix="%"), margin=dict(t=20, b=20))
+            st.plotly_chart(fig, use_container_width=True)
 
-        lookback_days = st.slider(
-            "📅 조회 기간 설정 (최근 n일)",
-            min_value=2,
-            max_value=max_days,
-            value=default_val
-        )
-    else:
-        lookback_days = max_days
-        st.info(f"ℹ️ 전체 데이터({max_days}일분)를 표시합니다.")
+    # --- 2번 탭: 분기 실적 요약 (QoQ, YoY 증감율) ---
+    with tab2:
+        if q_fin_df is not None and not q_fin_df.empty:
+            # 1. 필요 항목 추출 및 전치(Transpose)하여 시계열 순서로 정렬
+            items = {'Total Revenue': '매출액', 'Operating Income': '영업이익', 'Net Income': '당기순이익'}
+            available_items = [i for i in items.keys() if i in q_fin_df.index]
 
-    # 3. 차트 출력 부분
-    stock_series = valid_series.iloc[-lookback_days:]
+            if available_items:
+                # 데이터를 행(항목), 열(날짜) -> 행(날짜), 열(항목)로 변경 후 날짜 오름차순 정렬
+                df = q_fin_df.loc[available_items].T.sort_index(ascending=True)
+                df = df.rename(columns=items)
 
-    # 수익률 계산 (첫날 기준 0%)
-    stock_growth = (stock_series / stock_series.iloc[0] - 1) * 100
+                # 2. 증감율 계산
+                # QoQ (직전 분기 대비): 현재 행 / 이전 행 - 1
+                qoq_change = df.pct_change(periods=1) * 100
+                # YoY (작년 동분기 대비): 현재 행 / 4개 이전 행 - 1
+                yoy_change = df.pct_change(periods=4) * 100
 
-    fig = go.Figure()
-    fig.add_trace(go.Scatter(
-        x=stock_growth.index,
-        y=stock_growth.values,
-        mode='lines+markers' if lookback_days < 30 else 'lines',
-        line=dict(width=3, color='#00CC96'),
-        fill='tozeroy',
-        fillcolor='rgba(0, 204, 150, 0.1)',
-        hovertemplate="📅 %{x|%Y-%m-%d}<br>📈 수익률: %{y:.2f}%<extra></extra>"
-    ))
+                # 3. 최신 분기 데이터들만 역순으로(최신이 위로) 표시
+                latest_df = df.iloc[::-1].copy()
 
-    fig.update_layout(
-        template="plotly_dark",
-        title=f"최근 {lookback_days}일 수익률 추이",
-        margin=dict(l=20, r=20, t=50, b=20),
-        height=450,
-        yaxis=dict(ticksuffix="%")
-    )
-    st.plotly_chart(fig, use_container_width=True)
+                st.markdown("#### 📅 최근 분기별 실적 상세")
 
-    # 하단 지표
-    c1, c2 = st.columns(2)
-    with c1:
-        st.metric("현재가", f"{valid_series.iloc[-1]:,.0f}원")
-    with c2:
-        change_pct = ((valid_series.iloc[-1] / valid_series.iloc[-lookback_days]) - 1) * 100
-        st.metric(f"최근 {lookback_days}일 변동", f"{change_pct:+.2f}%")
+                for col in df.columns:
+                    st.write(f"**📍 {col}**")
+
+                    # 수치, QoQ, YoY를 합친 데이터프레임 생성
+                    display_df = pd.DataFrame({
+                        '금액': latest_df[col].map(lambda x: f"{x:,.0f}" if pd.notnull(x) else "-"),
+                        '직전분기 대비(QoQ)': qoq_change[col].iloc[::-1].map(
+                            lambda x: f"{x:+.2f}%" if pd.notnull(x) else "-"),
+                        '전년동기 대비(YoY)': yoy_change[col].iloc[::-1].map(lambda x: f"{x:+.2f}%" if pd.notnull(x) else "-")
+                    })
+
+                    # 날짜 형식 예쁘게 변경 (Index가 날짜형일 경우)
+                    display_df.index = [d.strftime('%Y-%m') for d in display_df.index]
+
+                    st.table(display_df)
+            else:
+                st.write("항목 정보를 불러올 수 없습니다.")
+        else:
+            st.info("해당 종목의 분기 실적 데이터를 불러올 수 없습니다.")
+
+    # --- 3번 탭: 투자 지표 (기존 유지) ---
+    with tab3:
+        if info_dict:
+            st.markdown("#### 💎 주요 투자 지표")
+            per = info_dict.get('trailingPE', '-');
+            pbr = info_dict.get('priceToBook', '-');
+            roe = info_dict.get('returnOnEquity', '-')
+            if isinstance(roe, (int, float)): roe = f"{roe * 100:.2f}%"
+            if isinstance(per, (int, float)): per = f"{per:.2f}배"
+            if isinstance(pbr, (int, float)): pbr = f"{pbr:.2f}배"
+            c1, c2, c3 = st.columns(3)
+            c1.metric("PER", per);
+            c2.metric("PBR", pbr);
+            c3.metric("ROE", roe)
+            with st.expander("📝 추가 지표 확인"):
+                st.write(f"- 시가총액: {info_dict.get('marketCap', 0):,}")
+                st.write(
+                    f"- 52주 최고/최저: {info_dict.get('fiftyTwoWeekHigh', 0):,} / {info_dict.get('fiftyTwoWeekLow', 0):,}")
+        else:
+            st.info("투자 지표 데이터를 불러올 수 없습니다.")
 
 
 st.set_page_config(layout="wide", page_title="AI Financial Dashboard")
@@ -704,7 +737,7 @@ if not macro_growth.empty:
                                     names = sector_map[sector_name]["names"]
                                     codes = sector_map[sector_name]["tickers"]
 
-                                    st.write("💡 종목명을 클릭하면 **상세 차트 팝업**이 열립니다.")
+                                    st.write("💡 세부내용은 종목명을 클릭하세요.")
 
                                     # 버튼을 한 줄에 여러 개 배치하거나 리스트로 배치
                                     for name, code in zip(names, codes):
@@ -1508,4 +1541,5 @@ for idx, (p_type, info) in enumerate(patterns_info.items()):
 # =========================
 # actual_date를 위에서 정의한 actual_valid_date로 변경
 st.markdown(f"<div style='text-align: center; color: gray; margin-top: 50px;'>🚀 v2.1 Optimized Dashboard | {actual_valid_date.strftime('%Y-%m-%d')}</div>", unsafe_allow_html=True)
+
 
