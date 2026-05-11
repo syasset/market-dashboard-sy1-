@@ -462,7 +462,7 @@ if not macro_growth.empty:
         # [수정] period 대신 정확한 start/end 날짜로 다운로드
         # start_dt보다 조금 더 여유있게(5일 전) 가져와야 첫날 수익률 계산이 정확합니다.
         actual_start = (pd.to_datetime(start_dt) - pd.Timedelta(days=5)).strftime('%Y-%m-%d')
-        actual_end = pd.to_datetime(end_dt).strftime('%Y-%m-%d')
+        actual_end = (pd.to_datetime(end_dt) + pd.Timedelta(days=1)).strftime('%Y-%m-%d')
 
         raw = yf.download(download_list, start=actual_start, end=actual_end, progress=False, threads=True)
 
@@ -1508,5 +1508,4 @@ for idx, (p_type, info) in enumerate(patterns_info.items()):
 # =========================
 # actual_date를 위에서 정의한 actual_valid_date로 변경
 st.markdown(f"<div style='text-align: center; color: gray; margin-top: 50px;'>🚀 v2.1 Optimized Dashboard | {actual_valid_date.strftime('%Y-%m-%d')}</div>", unsafe_allow_html=True)
-
 
