@@ -16,8 +16,76 @@ import yfinance as yf
 import pandas as pd
 import numpy as np
 
-st.set_page_config(layout="wide", page_title="AI Financial Dashboard")
 
+@st.dialog("종목 상세 분석", width="large")
+def show_stock_detail(ticker, name, df_krw):
+    st.write(f"### {name} ({ticker})")
+
+    if ticker not in df_krw.columns:
+        st.error("데이터를 찾을 수 없습니다.")
+        return
+
+    # 1. 실제 유효한 데이터 추출
+    valid_series = df_krw[ticker].dropna()
+    max_days = len(valid_series)
+
+    if max_days < 2:
+        st.warning("분석할 수 있는 시계열 데이터가 부족합니다. (최소 2일 필요)")
+        return
+
+    # 2. 슬라이더 설정 (최소값을 2로 낮춰서 웬만한 상황에선 다 나오게 함)
+    # 데이터가 2일뿐이라면 슬라이더가 필요 없으므로 조건 처리
+    if max_days > 2:
+        # 데이터가 30일보다 적으면 전체를 기본값으로, 많으면 30일을 기본값으로
+        default_val = min(30, max_days)
+
+        lookback_days = st.slider(
+            "📅 조회 기간 설정 (최근 n일)",
+            min_value=2,
+            max_value=max_days,
+            value=default_val
+        )
+    else:
+        lookback_days = max_days
+        st.info(f"ℹ️ 전체 데이터({max_days}일분)를 표시합니다.")
+
+    # 3. 차트 출력 부분
+    stock_series = valid_series.iloc[-lookback_days:]
+
+    # 수익률 계산 (첫날 기준 0%)
+    stock_growth = (stock_series / stock_series.iloc[0] - 1) * 100
+
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(
+        x=stock_growth.index,
+        y=stock_growth.values,
+        mode='lines+markers' if lookback_days < 30 else 'lines',
+        line=dict(width=3, color='#00CC96'),
+        fill='tozeroy',
+        fillcolor='rgba(0, 204, 150, 0.1)',
+        hovertemplate="📅 %{x|%Y-%m-%d}<br>📈 수익률: %{y:.2f}%<extra></extra>"
+    ))
+
+    fig.update_layout(
+        template="plotly_dark",
+        title=f"최근 {lookback_days}일 수익률 추이",
+        margin=dict(l=20, r=20, t=50, b=20),
+        height=450,
+        yaxis=dict(ticksuffix="%")
+    )
+    st.plotly_chart(fig, use_container_width=True)
+
+    # 하단 지표
+    c1, c2 = st.columns(2)
+    with c1:
+        st.metric("현재가", f"{valid_series.iloc[-1]:,.0f}원")
+    with c2:
+        change_pct = ((valid_series.iloc[-1] / valid_series.iloc[-lookback_days]) - 1) * 100
+        st.metric(f"최근 {lookback_days}일 변동", f"{change_pct:+.2f}%")
+
+
+st.set_page_config(layout="wide", page_title="AI Financial Dashboard")
+# =========================
 # 📊 섹터 매핑 설정
 # =========================
 SECTOR_MAP = {
@@ -632,12 +700,17 @@ if not macro_growth.empty:
                             st.plotly_chart(fig, use_container_width=True, key=f"chart_cum_fix_{sector_name}")
 
                             with st.expander(f"🔍 {sector_name} 구성종목 확인"):
-                                # sector_map에서 해당 섹터의 종목명과 티커를 가져옴
                                 if sector_name in sector_map:
                                     names = sector_map[sector_name]["names"]
                                     codes = sector_map[sector_name]["tickers"]
+
+                                    st.write("💡 종목명을 클릭하면 **상세 차트 팝업**이 열립니다.")
+
+                                    # 버튼을 한 줄에 여러 개 배치하거나 리스트로 배치
                                     for name, code in zip(names, codes):
-                                        st.write(f"- {name} ({code})")
+                                        # 클릭 시 팝업 함수 실행
+                                        if st.button(f"{name} ({code})", key=f"popup_{sector_name}_{code}"):
+                                            show_stock_detail(code, name, data_sector_krw)
                                 else:
                                     st.write("구성종목 정보가 없습니다.")
                     else:
@@ -1435,4 +1508,5 @@ for idx, (p_type, info) in enumerate(patterns_info.items()):
 # =========================
 # actual_date를 위에서 정의한 actual_valid_date로 변경
 st.markdown(f"<div style='text-align: center; color: gray; margin-top: 50px;'>🚀 v2.1 Optimized Dashboard | {actual_valid_date.strftime('%Y-%m-%d')}</div>", unsafe_allow_html=True)
+
 
