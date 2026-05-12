@@ -484,7 +484,7 @@ if not macro_growth.empty:
     # =========================
     # 🏗️ 1. 데이터 로드 및 전처리 (최적화 버전)
     # =========================
-    @st.cache_data(ttl=3600)
+    @st.cache_data(ttl=600)
     def get_processed_sector_data(sector_map, start_dt, end_dt):
         all_tickers = []
         for v in sector_map.values():
@@ -492,12 +492,22 @@ if not macro_growth.empty:
         fx_ticker = "USDKRW=X"
         download_list = list(set(all_tickers + [fx_ticker]))
 
-        # [수정] period 대신 정확한 start/end 날짜로 다운로드
-        # start_dt보다 조금 더 여유있게(5일 전) 가져와야 첫날 수익률 계산이 정확합니다.
-        actual_start = (pd.to_datetime(start_dt) - pd.Timedelta(days=5)).strftime('%Y-%m-%d')
-        actual_end = (pd.to_datetime(end_dt) + pd.Timedelta(days=1)).strftime('%Y-%m-%d')
+        # 오늘 날짜 확인 (실시간 데이터 여부 판단용)
+        today_str = datetime.now(pytz.timezone("Asia/Seoul")).strftime('%Y-%m-%d')
+        target_end_str = pd.to_datetime(end_dt).strftime('%Y-%m-%d')
 
-        raw = yf.download(download_list, start=actual_start, end=actual_end, progress=False, threads=True)
+        # [핵심 수정] 오늘 데이터를 보는 경우와 과거 데이터를 보는 경우를 분리
+        if target_end_str >= today_str:
+            # 오늘 데이터를 포함해야 하므로 period를 넉넉히 잡거나 end를 내일로 설정
+            # 가장 깔끔한 방법은 end를 오늘+1일로 설정하는 것입니다.
+            actual_start = (pd.to_datetime(start_dt) - pd.Timedelta(days=5)).strftime('%Y-%m-%d')
+            actual_end = (pd.to_datetime(end_dt) + pd.Timedelta(days=1)).strftime('%Y-%m-%d')
+            raw = yf.download(download_list, start=actual_start, end=actual_end, progress=False, threads=True)
+        else:
+            # 과거 특정 시점 조회 시 (기존 로직 유지)
+            actual_start = (pd.to_datetime(start_dt) - pd.Timedelta(days=5)).strftime('%Y-%m-%d')
+            actual_end = (pd.to_datetime(end_dt) + pd.Timedelta(days=1)).strftime('%Y-%m-%d')
+            raw = yf.download(download_list, start=actual_start, end=actual_end, progress=False, threads=True)
 
         if raw.empty or "Close" not in raw:
             return pd.DataFrame(), pd.DataFrame()
@@ -657,14 +667,23 @@ if not macro_growth.empty:
     # 이렇게 해야 차트가 선택한 날짜까지만 깔끔하게 나옵니다.
     try:
         if growth_sector is not None and not growth_sector.empty:
-            # .loc[시작일:종료일]을 사용하여 선택한 기간만큼만 추출합니다.
-            # 데이터가 없는 날짜일 수 있으므로 slice를 안전하게 가져옵니다.
-            growth_sector = growth_sector.loc[growth_sector.index >= start_date]
-            growth_sector = growth_sector.loc[growth_sector.index <= actual_valid_date]
+            # 시작일만 제한합니다.
+            growth_sector = growth_sector.loc[growth_sector.index >= pd.to_datetime(start_date)]
+
+            # [수정] 종료일이 오늘이면 슬라이싱 끝을 제한하지 않음 (실시간 데이터 보존)
+            today_date = pd.Timestamp.now().normalize()
+            if pd.to_datetime(actual_valid_date).normalize() < today_date:
+                # 과거 날짜를 선택했을 때만 끝을 자름
+                growth_sector = growth_sector.loc[
+                    growth_sector.index <= pd.to_datetime(actual_valid_date).replace(hour=23, minute=59)]
 
         if data_sector_krw is not None:
-            data_sector_krw = data_sector_krw.loc[data_sector_krw.index >= start_date]
-            data_sector_krw = data_sector_krw.loc[data_sector_krw.index <= actual_valid_date]
+            data_sector_krw = data_sector_krw.loc[data_sector_krw.index >= pd.to_datetime(start_date)]
+
+            # [수정] 종료일이 오늘이면 끝을 제한하지 않음
+            if pd.to_datetime(actual_valid_date).normalize() < today_date:
+                data_sector_krw = data_sector_krw.loc[
+                    data_sector_krw.index <= pd.to_datetime(actual_valid_date).replace(hour=23, minute=59)]
 
     except Exception as e:
         st.warning(f"데이터 슬라이싱 중 알림: {e}")
@@ -1541,5 +1560,6 @@ for idx, (p_type, info) in enumerate(patterns_info.items()):
 # =========================
 # actual_date를 위에서 정의한 actual_valid_date로 변경
 st.markdown(f"<div style='text-align: center; color: gray; margin-top: 50px;'>🚀 v2.1 Optimized Dashboard | {actual_valid_date.strftime('%Y-%m-%d')}</div>", unsafe_allow_html=True)
+
 
 
