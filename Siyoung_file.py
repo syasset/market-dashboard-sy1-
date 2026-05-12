@@ -15,7 +15,9 @@ import streamlit as st  # 이 줄이 반드시 있어야 합니다!
 import yfinance as yf
 import pandas as pd
 import numpy as np
+from streamlit_autorefresh import st_autorefresh
 
+st_autorefresh(interval=3 * 60 * 1000, key="data_refresh")
 
 @st.dialog("종목 상세 분석 및 재무 상태", width="large")
 def show_stock_detail(ticker, name, df_krw):
@@ -484,7 +486,7 @@ if not macro_growth.empty:
     # =========================
     # 🏗️ 1. 데이터 로드 및 전처리 (최적화 버전)
     # =========================
-    @st.cache_data(ttl=600)
+    @st.cache_data(ttl=180)
     def get_processed_sector_data(sector_map, start_dt, end_dt):
         all_tickers = []
         for v in sector_map.values():
