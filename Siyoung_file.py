@@ -1,4 +1,5 @@
 import plotly.graph_objects as go
+import plotly.express as pximport plotly.graph_objects as go
 import plotly.express as px
 import feedparser
 import urllib.parse
@@ -50,7 +51,7 @@ def show_stock_detail(ticker, name, df_krw):
             curr_price_usd = info_dict.get('currentPrice') or info_dict.get('regularMarketPrice', 0)
             p_col2.metric("현재가 (USD)", f"${curr_price_usd:,.2f}")
 
-    tab1, tab2, tab3 = st.tabs(["📈 주가 차트", "📊 분기 실적 요약", "💡 투자 지표"])
+    tab1, tab2, tab3, tab4 = st.tabs(["📈 주가 차트", "📊 분기 실적 요약", "💡 투자 지표", "🤖 AI 저평가 진단"])
 
     # --- 1번 탭: 주가 차트 (호버 기능 강화) ---
     with tab1:
@@ -82,7 +83,6 @@ def show_stock_detail(ticker, name, df_krw):
                 custom_data_list.append(usd_prices.values)
                 hover_template_str += "<br>가격(USD): $%{customdata[1]:.2f}"
 
-            import numpy as np
             custom_data_final = np.stack(custom_data_list, axis=-1)
 
             fig.add_trace(go.Scatter(
@@ -111,7 +111,7 @@ def show_stock_detail(ticker, name, df_krw):
                 f"⏱ **최근 {lookback_days}일간 수익률:** :{'red' if period_return > 0 else 'blue'}[{period_return:+.2f}%]")
         else:
             st.warning("차트 데이터가 부족합니다.")
-            
+
     # --- 2번 탭: 분기 실적 요약 (QoQ, YoY 증감율) ---
     with tab2:
         if q_fin_df is not None and not q_fin_df.empty:
@@ -176,8 +176,87 @@ def show_stock_detail(ticker, name, df_krw):
         else:
             st.info("투자 지표 데이터를 불러올 수 없습니다.")
 
+            # --- 4번 탭: AI 저평가 진단 ---
+        with tab4:
+                if info_dict and len(info_dict) > 0:
+                    st.markdown("#### 🔍 분석 엔진 가동: 투자 매력도 산출")
+
+                    # 1. 지표 추출 (데이터가 없을 경우를 대비해 0이나 None 처리)
+                    per = info_dict.get('trailingPE')
+                    pbr = info_dict.get('priceToBook')
+                    roe = info_dict.get('returnOnEquity')
+                    peg = info_dict.get('priceToEarningsGrowthRatio')
+
+                    score = 0
+                    analysis_logs = []
+
+                    # 2. 로직 분석 (각 지표가 존재할 때만 계산)
+                    # 가치 평가 (Value)
+                    if per is not None:
+                        if per < 15:
+                            score += 25
+                            analysis_logs.append("✅ **PER:** 이익 가치 대비 저평가 상태입니다.")
+                        elif per > 30:
+                            analysis_logs.append("⚠️ **PER:** 이익 대비 주가가 다소 고평가되어 있습니다.")
+                    else:
+                        analysis_logs.append("⚪ **PER:** 데이터가 없어 가치 분석을 건너뜁니다.")
+
+                    if pbr is not None:
+                        if pbr < 1.0:
+                            score += 25
+                            analysis_logs.append("✅ **PBR:** 장부상 자산 가치보다 주가가 낮습니다.")
+                    else:
+                        analysis_logs.append("⚪ **PBR:** 자산 가치 데이터가 없습니다.")
+
+                    # 수익성 평가 (Profitability)
+                    if roe is not None:
+                        if roe > 0.15:
+                            score += 25
+                            analysis_logs.append("✅ **ROE:** 자기자본 활용 능력이 매우 우수합니다.")
+                    else:
+                        analysis_logs.append("⚪ **ROE:** 수익성 데이터가 확인되지 않습니다.")
+
+                    # 성장성 평가 (Growth)
+                    if peg is not None:
+                        if peg < 1.0:
+                            score += 25
+                            analysis_logs.append("✅ **PEG:** 성장성 대비 주가가 매우 합리적입니다.")
+                    else:
+                        analysis_logs.append("⚪ **PEG:** 성장성 지표(PEG)가 제공되지 않습니다.")
+
+                    # 3. 결과 시각화
+                    st.divider()
+                    c1, c2 = st.columns([1, 2])
+
+                    with c1:
+                        # 점수에 따른 상태 및 색상 결정
+                        if score >= 75:
+                            st.success(f"### 분석 결과: **강력 저평가**")
+                        elif score >= 50:
+                            st.warning(f"### 분석 결과: **적정 가치**")
+                        else:
+                            st.error(f"### 분석 결과: **고평가 주의**")
+
+                        # 게이지 차트 대신 간단한 메트릭 표시
+                        st.metric("종합 투자 점수", f"{score} / 100")
+                        st.progress(score / 100)  # 시각적 바 추가
+
+                    with c2:
+                        st.markdown("##### 📝 세부 분석 리포트")
+                        if not analysis_logs:
+                            st.write("분석할 수 있는 재무 데이터가 충분하지 않습니다.")
+                        else:
+                            for log in analysis_logs:
+                                st.write(log)
+
+                    st.divider()
+                    st.caption("※ 본 진단은 야후 파이낸스 기본 지표를 활용한 통계적 가이드이며, 실제 투자는 개별 기업의 시장 점유율과 매크로 환경을 모두 고려해야 합니다.")
+                else:
+                    st.error("❌ 해당 종목의 상세 재무 정보를 불러오지 못했습니다. (야후 서버 응답 없음)")
+
 
 st.set_page_config(layout="wide", page_title="AI Financial Dashboard")
+
 # =========================
 # 📊 섹터 매핑 설정
 # =========================
@@ -1533,8 +1612,6 @@ for i, (kr_name, en_keyword) in enumerate(global_keywords.items()):
                     st.markdown(f"🔗 [기사 원문 읽기]({news['link']})")
         st.markdown("---")
 
-import numpy as np
-
 
 def draw_danger_chart(pattern_type):
     # 1. 패턴별 맞춤 가격 데이터 (30개씩)
@@ -1657,5 +1734,6 @@ for idx, (p_type, info) in enumerate(patterns_info.items()):
 # =========================
 # actual_date를 위에서 정의한 actual_valid_date로 변경
 st.markdown(f"<div style='text-align: center; color: gray; margin-top: 50px;'>🚀 v2.1 Optimized Dashboard | {actual_valid_date.strftime('%Y-%m-%d')}</div>", unsafe_allow_html=True)
+
 
 
