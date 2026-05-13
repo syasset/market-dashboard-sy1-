@@ -972,23 +972,62 @@ if not macro_growth.empty:
     # =========================================================
     def render_correlation_analysis(df):
         st.markdown("### 🔗 자산 간 상관관계 분석 (최근 120일)")
+        st.caption("주요 지수, 원자재, 환율 등 거시 경제 지표 간의 동행성을 분석합니다.")
 
-        # 최근 120일 데이터 기준 상관계수 계산
-        corr = df.tail(120).corr()
+        # 1. 최근 120일 데이터 기준 상관계수 계산
+        # 가격 지수 자체보다 변동성(pct_change) 기반 분석이 매크로 흐름 파악에 더 정확합니다.
+        corr = df.tail(120).pct_change().corr()
 
-        fig_corr = px.imshow(
-            corr,
-            text_auto=".2f",
-            aspect="auto",
-            color_continuous_scale="RdBu_r",  # 상승(빨강)-하락(파랑) 반전
-            zmin=-1, zmax=1,
-            title="Asset Correlation Heatmap"
-        )
-        fig_corr.update_layout(height=500, margin=dict(t=50, b=10, l=10, r=10))
-        st.plotly_chart(fig_corr, use_container_width=True)
+        # 2. 레이아웃 분할 (히트맵 | AI 통계 분석)
+        col_left, col_right = st.columns([1.2, 0.8])
+
+        with col_left:
+            fig_corr = px.imshow(
+                corr,
+                text_auto=".2f",
+                aspect="auto",
+                color_continuous_scale="RdBu_r",
+                zmin=-1, zmax=1,
+                title="Asset Correlation Heatmap"
+            )
+            fig_corr.update_layout(height=500, margin=dict(t=50, b=10, l=10, r=10))
+            st.plotly_chart(fig_corr, use_container_width=True)
+
+        with col_right:
+            st.markdown("#### 🤖 자산 흐름 분석 리포트")
+
+            # 상관계수 행렬 가공 (중복 제거)
+            mask = np.triu(np.ones(corr.shape), k=1).astype(bool)
+            sol = corr.where(mask).unstack().dropna().sort_values()
+
+            # 상위/하위 관계 추출
+            decoupling_pairs = sol.head(2)  # 가장 반대로 움직이는 2개
+            coupling_pairs = sol.tail(2)  # 가장 같이 움직이는 2개
+
+            # --- [섹션 1: 커플링(동행)] ---
+            st.markdown("##### ✅ 강한 동행 (커플링)")
+            for (a1, a2), val in coupling_pairs.iloc[::-1].items():
+                st.success(f"**{a1} ↔ {a2}** (상관계수: {val:.2f})")
+            st.caption("두 자산은 현재 같은 방향으로 움직이는 경향이 매우 강합니다.")
+
+            st.write("")  # 간격 조절
+
+            # --- [섹션 2: 디커플링(반등)] ---
+            st.markdown("##### 🔄 강한 반동 (디커플링)")
+            for (a1, a2), val in decoupling_pairs.items():
+                # 음수일 경우 강조
+                box_style = "border-left: 5px solid #E74C3C; background-color: rgba(231, 76, 60, 0.1);" if val < 0 else "border-left: 5px solid #F1C40F;"
+                st.markdown(f"""
+                    <div style="{box_style} padding: 10px; border-radius: 5px; margin-bottom: 5px;">
+                        <small style="color:gray;">상관도: {val:.2f}</small><br>
+                        <b style="font-size:15px;">{a1} ↔ {a2}</b>
+                    </div>
+                """, unsafe_allow_html=True)
+
+            st.info("💡 상관관계가 낮은 자산들을 조합하면 포트폴리오의 전체 변동성을 낮출 수 있습니다.")
 
 
-    # 실행 시 (데이터 로드 후 적절한 위치에서 호출)
+    # 실행 호출부
     render_correlation_analysis(data.drop(columns=["USDKRW"]))
 
     # =========================================================
@@ -1336,23 +1375,41 @@ for i, keyword in enumerate(keywords):
 # =========================
 # 🛠 뉴스 데이터 정제 및 번역 함수
 # =========================
+from urllib.parse import quote
+
+
 def clean_text(text):
     if not text: return ""
-    # 1. HTML 엔티티 변환 (&quot; -> ", &amp; -> & 등)
     text = html.unescape(text)
-    # 2. HTML 태그 제거 (<a ...></a>, <img> 등)
     text = re.sub(r'<[^>]+>', '', text)
-    # 3. 불필요한 줄바꿈 및 공백 정리
     text = text.replace('\n', ' ').strip()
     return text
 
 
+# --- ✅ 추가: 번역 전용 독립 캐시 함수 ---
+@st.cache_data(ttl=86400)  # 24시간 동안 번역 결과 기억
+def get_cached_translation(text, langpair="en|ko"):
+    if not text: return ""
+    try:
+        # MyMemory API 호출
+        t_url = f"https://api.mymemory.translated.net/get?q={quote(text[:250])}&langpair={langpair}"
+        t_res = requests.get(t_url, timeout=5).json()
+        translated = t_res.get('responseData', {}).get('translatedText', text)
+
+        # API 경고 메시지 처리
+        if "MYMEMORY WARNING" in translated or not translated:
+            return None  # None을 반환하여 호출부에서 원문을 쓰도록 유도
+
+        return clean_text(translated)
+    except Exception:
+        return None
+
+
+# --- ✅ 수정된 뉴스 로드 함수 ---
 @st.cache_data(ttl=3600)
 def get_global_news_ai(keyword_en, limit=2):
-    # 1. RSS URL 구조 최적화
     encoded_keyword = quote(keyword_en)
     rss_url = f"https://news.google.com/rss/search?q={encoded_keyword}&hl=en-US&gl=US&ceid=US:en"
-
     feed = feedparser.parse(rss_url)
 
     if not feed.entries:
@@ -1360,46 +1417,26 @@ def get_global_news_ai(keyword_en, limit=2):
 
     summarized_news = []
     for entry in feed.entries[:limit]:
-        # 기사 제목과 설명 정제
         original_title = clean_text(entry.title)
-        # 구글 뉴스 summary에는 기사 링크 등 HTML이 많이 포함되어 있어 강한 정제 필요
         raw_desc = clean_text(entry.summary) if 'summary' in entry else original_title
-        # 번역 API 전송을 위해 길이 제한
         raw_desc = raw_desc[:250]
 
-        try:
-            # MyMemory API 번역 (제목)
-            t_url = f"https://api.mymemory.translated.net/get?q={quote(original_title[:150])}&langpair=en|ko"
-            t_res = requests.get(t_url, timeout=5).json()
-            translated_title = t_res.get('responseData', {}).get('translatedText', original_title)
-            translated_title = clean_text(translated_title) # 번역 결과물 정제
+        # 1. 제목 번역 (캐시 함수 이용)
+        translated_title = get_cached_translation(original_title)
+        if not translated_title:  # 번역 실패나 제한 시 원문 유지
+            translated_title = original_title
 
-            # 번역 결과 필터링
-            if "MYMEMORY WARNING" in translated_title or not translated_title:
-                translated_title = original_title
+        # 2. 요약본 번역 (캐시 함수 이용)
+        translated_summary = get_cached_translation(raw_desc)
+        if not translated_summary:
+            translated_summary = "원문을 참고해 주세요. (실시간 번역량 초과 혹은 오류)"
 
-            # MyMemory API 번역 (요약본)
-            d_url = f"https://api.mymemory.translated.net/get?q={quote(raw_desc[:250])}&langpair=en|ko"
-            d_res = requests.get(d_url, timeout=5).json()
-            translated_summary = d_res.get('responseData', {}).get('translatedText', "요약을 불러올 수 없습니다.")
-            translated_summary = clean_text(translated_summary) # 번역 결과물 정제
-
-            if "MYMEMORY WARNING" in translated_summary:
-                translated_summary = "원문을 참고해 주세요. (실시간 번역량 초과)"
-
-            summarized_news.append({
-                "title": translated_title,
-                "original_title": original_title,
-                "link": entry.link,
-                "summary": translated_summary
-            })
-        except Exception:
-            summarized_news.append({
-                "title": original_title,
-                "original_title": original_title,
-                "link": entry.link,
-                "summary": "내용 요약 및 번역 중 오류가 발생했습니다. 원문 링크를 확인하세요."
-            })
+        summarized_news.append({
+            "title": translated_title,
+            "original_title": original_title,
+            "link": entry.link,
+            "summary": translated_summary
+        })
 
     return summarized_news
 
@@ -1562,6 +1599,7 @@ for idx, (p_type, info) in enumerate(patterns_info.items()):
 # =========================
 # actual_date를 위에서 정의한 actual_valid_date로 변경
 st.markdown(f"<div style='text-align: center; color: gray; margin-top: 50px;'>🚀 v2.1 Optimized Dashboard | {actual_valid_date.strftime('%Y-%m-%d')}</div>", unsafe_allow_html=True)
+
 
 
 
