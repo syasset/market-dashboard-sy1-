@@ -19,18 +19,14 @@ from streamlit_autorefresh import st_autorefresh
 
 st_autorefresh(interval=3 * 60 * 1000, key="data_refresh")
 
+
 @st.dialog("종목 상세 분석 및 재무 상태", width="large")
 def show_stock_detail(ticker, name, df_krw):
-    st.write(f"### {name} ({ticker})")
-
-    tab1, tab2, tab3 = st.tabs(["📈 주가 차트", "📊 분기 실적 요약", "💡 투자 지표"])
-
-    # --- 데이터 로드 (분기 데이터 추가) ---
+    # --- 데이터 로드 ---
     @st.cache_data(ttl=86400)
     def get_financial_info(t_code):
         try:
             t = yf.Ticker(t_code)
-            # 분기 손익계산서 (최근 4~5분기 제공)
             q_fin = t.quarterly_financials
             info = t.info
             return q_fin, info
@@ -39,21 +35,83 @@ def show_stock_detail(ticker, name, df_krw):
 
     q_fin_df, info_dict = get_financial_info(ticker)
 
-    # --- 1번 탭: 주가 차트 (기존 유지) ---
+    # --- 상단 헤더 ---
+    col_title, col_price = st.columns([1.5, 1])
+    with col_title:
+        st.write(f"### {name} ({ticker})")
+
+    with col_price:
+        curr_price_krw = df_krw[ticker].dropna().iloc[-1] if ticker in df_krw.columns else 0
+        is_foreign = not any(ex in ticker.upper() for ex in [".KS", ".KQ"])
+
+        p_col1, p_col2 = st.columns(2)
+        p_col1.metric("현재가 (KRW)", f"{curr_price_krw:,.0f}원")
+        if is_foreign and info_dict:
+            curr_price_usd = info_dict.get('currentPrice') or info_dict.get('regularMarketPrice', 0)
+            p_col2.metric("현재가 (USD)", f"${curr_price_usd:,.2f}")
+
+    tab1, tab2, tab3 = st.tabs(["📈 주가 차트", "📊 분기 실적 요약", "💡 투자 지표"])
+
+    # --- 1번 탭: 주가 차트 (호버 기능 강화) ---
     with tab1:
         valid_series = df_krw[ticker].dropna()
         if len(valid_series) > 2:
             lookback_days = st.slider("조회 기간 설정 (일)", 2, len(valid_series), min(30, len(valid_series)),
                                       key=f"slider_{ticker}")
-            stock_series = valid_series.iloc[-lookback_days:]
-            stock_growth = (stock_series / stock_series.iloc[0] - 1) * 100
+
+            # 1. 원본 가격 데이터 및 수익률 계산
+            price_series = valid_series.iloc[-lookback_days:]
+            stock_growth = (price_series / price_series.iloc[0] - 1) * 100
+
+            # 2. 해외 종목인 경우 달러 가격 계산 (df_krw 생성 시 사용한 USDKRW 역산)
+            # 만약 전역 변수 'data'에 USDKRW가 있다면 가져와서 계산합니다.
+            usd_prices = None
+            if is_foreign and 'data' in globals() and 'USDKRW' in globals()['data'].columns:
+                exchange_rate = globals()['data']['USDKRW'].reindex(price_series.index, method='ffill')
+                usd_prices = price_series / exchange_rate
+
+            # 3. 차트 생성
             fig = go.Figure()
-            fig.add_trace(go.Scatter(x=stock_growth.index, y=stock_growth.values, mode='lines',
-                                     line=dict(width=3, color='#00CC96'), fill='tozeroy',
-                                     fillcolor='rgba(0, 204, 150, 0.1)'))
-            fig.update_layout(template="plotly_dark", height=400, yaxis=dict(ticksuffix="%"), margin=dict(t=20, b=20))
+
+            # 호버에 표시할 데이터 묶기 (한화 가격, 달러 가격)
+            # customdata는 리스트의 리스트 형태로 넘겨야 합니다.
+            custom_data_list = [price_series.values]
+            hover_template_str = "날짜: %{x}<br><b>수익률: %{y:.2f}%</b><br>가격(KRW): %{customdata[0]:,.0f}원"
+
+            if usd_prices is not None:
+                custom_data_list.append(usd_prices.values)
+                hover_template_str += "<br>가격(USD): $%{customdata[1]:.2f}"
+
+            import numpy as np
+            custom_data_final = np.stack(custom_data_list, axis=-1)
+
+            fig.add_trace(go.Scatter(
+                x=stock_growth.index,
+                y=stock_growth.values,
+                customdata=custom_data_final,
+                mode='lines',
+                line=dict(width=3, color='#00CC96'),
+                fill='tozeroy',
+                fillcolor='rgba(0, 204, 150, 0.1)',
+                hovertemplate=hover_template_str + "<extra></extra>"
+            ))
+
+            fig.update_layout(
+                template="plotly_dark",
+                height=400,
+                yaxis=dict(ticksuffix="%"),
+                margin=dict(t=20, b=20),
+                hovermode="x unified"
+            )
             st.plotly_chart(fig, use_container_width=True)
 
+            # 하단 수익률 요약 텍스트
+            period_return = (price_series.iloc[-1] / price_series.iloc[0] - 1) * 100
+            st.write(
+                f"⏱ **최근 {lookback_days}일간 수익률:** :{'red' if period_return > 0 else 'blue'}[{period_return:+.2f}%]")
+        else:
+            st.warning("차트 데이터가 부족합니다.")
+            
     # --- 2번 탭: 분기 실적 요약 (QoQ, YoY 증감율) ---
     with tab2:
         if q_fin_df is not None and not q_fin_df.empty:
@@ -1599,7 +1657,5 @@ for idx, (p_type, info) in enumerate(patterns_info.items()):
 # =========================
 # actual_date를 위에서 정의한 actual_valid_date로 변경
 st.markdown(f"<div style='text-align: center; color: gray; margin-top: 50px;'>🚀 v2.1 Optimized Dashboard | {actual_valid_date.strftime('%Y-%m-%d')}</div>", unsafe_allow_html=True)
-
-
 
 
