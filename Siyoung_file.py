@@ -16,8 +16,92 @@ import yfinance as yf
 import pandas as pd
 import numpy as np
 from streamlit_autorefresh import st_autorefresh
+import json
+from google import genai
+
+if 'sector_df' not in locals():
+    sector_df = pd.DataFrame()
+if 'news_list' not in locals():
+    news_list = []
 
 st_autorefresh(interval=3 * 60 * 1000, key="data_refresh")
+
+#==========================
+ # 제미나이 분석 체계 기획
+#==========================
+@st.cache_data(ttl=3600)
+def get_ai_macro_analysis(news_list=None, limit=None, market_data=None, macro_data=None, sector_data=None):
+    # [이 두 줄만 추가하세요]
+    # 버튼을 눌러 ai_status가 'processing'이 된 상태가 아니면 아예 실행하지 않고 리턴합니다.
+    if st.session_state.get('ai_status') != "processing":
+        return None
+
+    try:
+        # 이 아래부터는 사용자님의 기존 코드를 그대로 유지하세요.
+        client = genai.Client(
+            api_key=st.secrets["GEMINI_API_KEY"],
+            http_options={'api_version': 'v1'} # 기존 설정 유지
+        )
+
+        # 1. 뉴스 컨텍스트 생성
+        news_context = ""
+        if news_list:
+            if isinstance(news_list, list):
+                news_context = "\n".join(
+                    [str(n.get('title', n)) if isinstance(n, dict) else str(n) for n in news_list[:limit or 10]])
+            else:
+                news_context = str(news_list)
+
+        # 2. 수치 데이터 컨텍스트 생성 (지수, 매크로, 섹터)
+        data_summary = ""
+        if market_data is not None and not market_data.empty:
+            last_change = market_data.iloc[-1] - market_data.iloc[-2] if len(market_data) > 1 else market_data.iloc[-1]
+            data_summary += f"\n[주요 지수 최근 변화율]\n{last_change.to_string()}\n"
+
+        if macro_data is not None and not macro_data.empty:
+            last_macro = macro_data.iloc[-1]
+            data_summary += f"\n[매크로 지표 현재 상태]\n{last_macro.to_string()}\n"
+
+        if sector_data is not None and not sector_data.empty:
+            # 안전한 연산을 위해 인덱싱 수정
+            sector_perf = (sector_data.iloc[-1] / sector_data.iloc - 1) * 100
+            data_summary += f"\n[기간 내 섹터별 수익률]\n{sector_perf.to_string()}\n"
+
+        # 3. 강화된 프롬프트 구성
+        prompt = f"""
+        당신은 전문 수석 이코노미스트이자 자산운용가입니다. 
+        제공된 뉴스 데이터와 실제 시장 수치를 바탕으로 종합 분석 리포트를 작성하세요.
+
+        [뉴스 데이터]:
+        {news_context}
+
+        [실제 시장 데이터]:
+        {data_summary}
+
+        분석 가이드라인:
+        1. 핵심 시황 요약: 현재 시장의 가장 큰 테마를 정의하세요.
+        2. 데이터 해석: 지수와 매크로 지표(환율, 금리 등)의 움직임이 뉴스 내용과 어떻게 일치하거나 상충하는지 분석하세요.
+        3. 섹터 전략: 수익률이 좋거나 나쁜 섹터의 원인을 진단하고 향후 유망 섹터를 추천하세요.
+        4. 핵심 투자 전략 (3줄 요약): 구체적인 액션 플랜을 제시하세요.
+        """
+
+        # 4. 모델 호출 로직
+        for model_name in ["gemini-2.5-flash", "gemini-1.5-flash"]:
+            try:
+                response = client.models.generate_content(model=model_name, contents=prompt)
+                if response and response.text:
+                    return response.text
+            except Exception:
+                continue
+
+        return "현재 AI 분석 서버가 응답하지 않습니다."
+
+    except Exception as e:
+        return f"AI 분석 중 오류 발생: {str(e)}"
+
+# 이름 연결 (할당 시 ()를 붙이지 않음)
+get_global_news_ai = get_ai_macro_analysis
+
 
 
 @st.dialog("종목 상세 분석 및 재무 상태", width="large")
@@ -253,8 +337,8 @@ def show_stock_detail(ticker, name, df_krw):
                 else:
                     st.error("❌ 해당 종목의 상세 재무 정보를 불러오지 못했습니다. (야후 서버 응답 없음)")
 
-
 st.set_page_config(layout="wide", page_title="AI Financial Dashboard")
+
 
 # =========================
 # 📊 섹터 매핑 설정
@@ -758,7 +842,18 @@ if not macro_growth.empty:
         default_d_idx = len(days) - 1
         sel_d = st.selectbox("Day", options=days, index=default_d_idx, key="sb_day")
 
-        st.sidebar.divider()  # 구분선
+        try:
+            # 뉴스 데이터 가져오기
+            recent_news = get_global_news_ai(limit=8)
+
+            if recent_news:
+                with st.spinner("Gemini가 시황 분석 중..."):
+                    analysis_result = get_ai_macro_analysis(recent_news)
+                    st.markdown(analysis_result)
+
+        except Exception as e:
+            st.error(f"실행 오류: {e}")
+
 
     # 2. 날짜 매칭 로직 (기존 로직 유지)
     target_date = available_dates[(available_dates.year == sel_y) &
@@ -952,6 +1047,7 @@ if not macro_growth.empty:
         st.warning(f"📢 **{actual_valid_date.strftime('%Y-%m-%d')}**는 시장 휴장일입니다. 직전 영업일 데이터를 참조합니다.")
     else:
         st.info(f"📍 분석 시점: **{actual_valid_date.strftime('%Y-%m-%d')}** (환율: {current_fx:,.2f}원)")
+
     # =========================
     # 📊 지수별 정리표
     # =========================
@@ -1411,8 +1507,17 @@ if not macro_growth.empty:
             trend_results.append({"항목": t, **analyze_trend_fast(t, data, date_idx)})
 
     if 'sector_df' in locals():
-        # [해결] actual_date -> actual_valid_date로 변경하여 NameError 방지
-        s_idx = sector_df.index.get_indexer([actual_valid_date], method='nearest')[0]
+        # 1. 인덱스가 날짜 형식이 아닐 경우를 대비해 강제로 변환합니다.
+        if not isinstance(sector_df.index, pd.DatetimeIndex):
+            sector_df.index = pd.to_datetime(sector_df.index)
+
+        # 2. 비교 대상인 actual_valid_date도 동일한 날짜 형식으로 맞춥니다.
+        target_date = pd.to_datetime(actual_valid_date)
+
+        # 3. 형식을 맞춘 후 인덱스를 찾습니다.
+        s_idx = sector_df.index.get_indexer([target_date], method='nearest')[0]
+
+
         for s_name in sector_df.columns:
             res = analyze_trend_fast(s_name, sector_df, s_idx)
             res["항목"] = f"Sector: {s_name}"
@@ -1480,6 +1585,64 @@ with summary_col4:
     st.metric("Worst Asset", worst_asset, delta=f"{row_growth[worst_asset]:.2f}%", delta_color="inverse")
 
 
+# =========================
+# 🛠️ 제미나이 분석 버튼
+# =========================
+
+    # --- 팝업 함수 (파일 상단 함수 정의 구역에 배치) ---
+    # 1. 먼저 팝업창(Dialog) 함수를 정의합니다 (파일 상단 함수 정의 구역에 배치)
+    @st.dialog("📊 Gemini AI 종합 마켓 리포트", width="large")
+    def show_ai_report_popup(content):
+        st.markdown(content)
+        if st.button("리포트 닫기"):
+            st.rerun()
+
+    if 'ai_status' not in st.session_state:
+        st.session_state.ai_status = "ready"  # ready, processing, complete
+    if 'ai_result' not in st.session_state:
+        st.session_state.ai_result = ""
+
+    # 2. 사이드바 알림 센터 로직 (기존 사이드바 코드 교체)
+    with st.sidebar:
+        st.markdown("---")
+        st.subheader("🔔 AI 분석 알림함")
+
+        # 분석 시작 버튼
+        if st.button("🚀 마켓 분석 예약", use_container_width=True):
+            st.session_state.ai_status = "processing"
+            st.rerun()
+
+        # 백그라운드 분석 진행 (상태가 processing일 때)
+        if st.session_state.ai_status == "processing":
+            with st.status("🛠️ AI 비서가 데이터를 분석 중입니다...", expanded=False):
+                st.write("실시간 시황 및 매크로 지표 분석 중...")
+
+                # 분석 함수 호출
+                report = get_ai_macro_analysis(
+                    #news_list=news_list,
+                    market_data=growth,
+                    macro_data=macro_growth,
+                    sector_data=sector_df if 'sector_df' in locals() else None
+                )
+
+                st.session_state.ai_result = report
+                st.session_state.ai_status = "complete"
+                st.rerun()
+
+        # 분석 완료 후 알림 UI
+        if st.session_state.ai_status == "complete":
+            st.success("✅ 분석 리포트가 도착했습니다!")
+            # [핵심] 클릭 시 팝업을 띄우는 버튼
+            if st.button("📩 리포트 열어보기", use_container_width=True, type="primary"):
+                show_ai_report_popup(st.session_state.ai_result)
+
+            if st.button("알림 삭제", use_container_width=True):
+                st.session_state.ai_status = "ready"
+                st.session_state.ai_result = ""
+                st.rerun()
+
+        elif st.session_state.ai_status == "ready":
+            st.caption("분석 예약 버튼을 누르면 백그라운드에서 작업이 시작됩니다.")
 
 # =========================
 # 📰 5. 뉴스 분석 (링크 포함)
@@ -1611,6 +1774,10 @@ for i, (kr_name, en_keyword) in enumerate(global_keywords.items()):
                     st.markdown(f"🔗 [기사 원문 읽기]({news['link']})")
         st.markdown("---")
 
+
+# =========================
+#  하락패턴
+# =========================
 
 def draw_danger_chart(pattern_type):
     # 1. 패턴별 맞춤 가격 데이터 (30개씩)
