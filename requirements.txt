@@ -6,3 +6,4 @@ feedparser
 streamlit-autorefresh
 requests
 matplotlib
+google-genai
