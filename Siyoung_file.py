@@ -29,79 +29,126 @@ st_autorefresh(interval=3 * 60 * 1000, key="data_refresh")
 #==========================
  # 제미나이 분석 체계 기획
 #==========================
-@st.cache_data(ttl=3600)
-def get_ai_macro_analysis(news_list=None, limit=None, market_data=None, macro_data=None, sector_data=None):
-    # [이 두 줄만 추가하세요]
-    # 버튼을 눌러 ai_status가 'processing'이 된 상태가 아니면 아예 실행하지 않고 리턴합니다.
-    if st.session_state.get('ai_status') != "processing":
-        return None
-
+# 1. 제미나이 엔진 (문자열을 절대로 리턴하지 않음 -> 사이드바 출력 원천 봉쇄)
+def get_ai_macro_analysis(news_list=None, market_data=None, macro_data=None, sector_df=None, limit=None):
     try:
-        # 이 아래부터는 사용자님의 기존 코드를 그대로 유지하세요.
+        # [교훈] 사용자 정답 경로 및 v1 명시 고정
         client = genai.Client(
             api_key=st.secrets["GEMINI_API_KEY"],
-            http_options={'api_version': 'v1'} # 기존 설정 유지
+            http_options={'api_version': 'v1'}
         )
 
-        # 1. 뉴스 컨텍스트 생성
-        news_context = ""
-        if news_list:
-            if isinstance(news_list, list):
-                news_context = "\n".join(
-                    [str(n.get('title', n)) if isinstance(n, dict) else str(n) for n in news_list[:limit or 10]])
-            else:
-                news_context = str(news_list)
-
-        # 2. 수치 데이터 컨텍스트 생성 (지수, 매크로, 섹터)
-        data_summary = ""
-        if market_data is not None and not market_data.empty:
-            last_change = market_data.iloc[-1] - market_data.iloc[-2] if len(market_data) > 1 else market_data.iloc[-1]
-            data_summary += f"\n[주요 지수 최근 변화율]\n{last_change.to_string()}\n"
-
-        if macro_data is not None and not macro_data.empty:
-            last_macro = macro_data.iloc[-1]
-            data_summary += f"\n[매크로 지표 현재 상태]\n{last_macro.to_string()}\n"
-
-        if sector_data is not None and not sector_data.empty:
-            # 안전한 연산을 위해 인덱싱 수정
-            sector_perf = (sector_data.iloc[-1] / sector_data.iloc - 1) * 100
-            data_summary += f"\n[기간 내 섹터별 수익률]\n{sector_perf.to_string()}\n"
-
-        # 3. 강화된 프롬프트 구성
+        d_limit = limit if limit else 12
+        n_txt = "\n".join([str(n) for n in news_list[:d_limit]]) if news_list else "데이터 없음"
         prompt = f"""
-        당신은 전문 수석 이코노미스트이자 자산운용가입니다. 
-        제공된 뉴스 데이터와 실제 시장 수치를 바탕으로 종합 분석 리포트를 작성하세요.
+        당신은 글로벌 자산운용사의 수석 투자 전략가입니다.
+        아래 뉴스 데이터와 시장 지표를 분석하여 전문적인 리포트를 작성하세요.
+        
+        [참고 데이터]
+        뉴스: 금리, 전쟁, 오일쇼크, 신기술 개발(양자역학, 휴머노이드, UAM 등), 패권, 인수 합병, 협약, 나스닥, 다우존스, S&P500, 코스피, 코스닥, 환율 등
+        지표: 매크로 경제, 미국 2년 부채, 미국 10년 부채, 달러인덱스, 고용지표, 한국 부채, 나스닥, 다우존스, S&P500, 코스피, 코스닥, 환율 등
+        
+        [필수 포함 내용]
+        ※ 갑작스런 지수 등락 시 뉴스 및 지표의 키워드 등을 활용한 원인을 분석하고 대답해주세요.
+        1. 핵심 시황 진단: 현재 시장의 가장 큰 테마와 리스크 요인을 분석하세요.
+        2. 🎯 유망 종목 추천: 글로벌 시총 TOP 50 및 국내 우량주 기준 현재 상황에서 가장 수익성이 기대되는 5종목을 각각 선정하고 선정 이유를 설명하세요.
+        3. 전략 요약: 향후 투자 포지션에 대한 3줄 요약 가이드를 제시하세요.
 
-        [뉴스 데이터]:
-        {news_context}
-
-        [실제 시장 데이터]:
-        {data_summary}
-
-        분석 가이드라인:
-        1. 핵심 시황 요약: 현재 시장의 가장 큰 테마를 정의하세요.
-        2. 데이터 해석: 지수와 매크로 지표(환율, 금리 등)의 움직임이 뉴스 내용과 어떻게 일치하거나 상충하는지 분석하세요.
-        3. 섹터 전략: 수익률이 좋거나 나쁜 섹터의 원인을 진단하고 향후 유망 섹터를 추천하세요.
-        4. 핵심 투자 전략 (3줄 요약): 구체적인 액션 플랜을 제시하세요.
         """
 
-        # 4. 모델 호출 로직
-        for model_name in ["gemini-2.5-flash", "gemini-1.5-flash"]:
-            try:
-                response = client.models.generate_content(model=model_name, contents=prompt)
-                if response and response.text:
-                    return response.text
-            except Exception:
-                continue
+        response = client.models.generate_content(
+            model="models/gemini-2.5-flash",
+            contents=prompt
+        )
 
-        return "현재 AI 분석 서버가 응답하지 않습니다."
+        if response and response.text:
+            st.session_state.stored_report = response.text
+            st.session_state.api_status = "SUCCESS"
+        else:
+            st.session_state.api_status = "EMPTY"
 
     except Exception as e:
-        return f"AI 분석 중 오류 발생: {str(e)}"
+        err_msg = str(e)
+        # 429 과부하 에러일 경우 대기 초 추출
+        if "429" in err_msg:
+            retry_seconds = 60
+            match = re.search(r"retry in ([\d\.]+)s", err_msg)
+            if match:
+                retry_seconds = int(float(match.group(1)))
+            st.session_state.retry_wait_time = retry_seconds
+            st.session_state.last_error_time = time.time()
+            st.session_state.api_status = "QUOTA_EXCEEDED"
+            st.session_state.error_detail = err_msg
+        else:
+            st.session_state.api_status = "SERVER_ERROR"
+            st.session_state.error_detail = err_msg
 
-# 이름 연결 (할당 시 ()를 붙이지 않음)
+
+# ✅ 기존 시스템 간의 완벽한 호환성 연결
 get_global_news_ai = get_ai_macro_analysis
 
+
+# 2. 결과 및 에러 출력 공용 팝업창 (사이드바를 더럽히지 않는 유일한 소통 창구)
+@st.dialog("📊 AI 종합 마켓 분석 시스템", width="large")
+def show_report_popup(title, content):
+    st.subheader(title)
+    st.markdown(content)
+    if st.button("닫기"):
+        st.rerun()
+
+
+# 3. 사이드바 UI 로직 (완성도 개념을 탑재한 클린 UI)
+def run_sidebar_logic(news_list, growth, macro_growth, sector_df):
+    st.sidebar.markdown("---")
+    st.sidebar.subheader("🤖 AI 인텔리전스")
+
+    # 세션 상태 변수 초기화 (이전 결과물은 에러가 나도 절대 건드리지 않고 보존)
+    if 'stored_report' not in st.session_state: st.session_state.stored_report = ""
+    if 'api_status' not in st.session_state: st.session_state.api_status = "READY"
+    if 'retry_wait_time' not in st.session_state: st.session_state.retry_wait_time = 0
+    if 'last_error_time' not in st.session_state: st.session_state.last_error_time = None
+    if 'error_detail' not in st.session_state: st.session_state.error_detail = ""
+
+    # [기능 1] 마켓 분석 예약 버튼
+    if st.sidebar.button("🚀 마켓 분석 예약", use_container_width=True):
+        with st.sidebar.status("데이터 분석 중...", expanded=False) as status:
+            # ⚠️ 이제 이 함수는 아무것도 리턴하지 않고 세션만 바꿉니다.
+            # 외부에서 st.write(result)를 수행하더라도 무조건 None이므로 사이드바에 글자가 안 찍힙니다.
+            get_global_news_ai(news_list, growth, macro_growth, sector_df, limit=12)
+
+            if st.session_state.api_status == "SUCCESS":
+                status.update(label="분석 완료!", state="complete")
+                # 성공 시 즉시 팝업 노출하도록 트리거 설정
+                st.session_state.trigger_popup = ("📊 AI 종합 마켓 분석 리포트", st.session_state.stored_report)
+            else:
+                status.update(label="분석 일시적 실패", state="error")
+                # 에러 발생 시 에러 전용 팝업창 트리거 설정
+                err_content = f"🚨 **구글 API 호출 과부하 (429 할당량 초과)**\n\n지정된 대기 시간이 지난 후 다시 분석을 요청해주세요.\n\n---\n**[에러 원문]**\n{st.session_state.error_detail}"
+                st.session_state.trigger_popup = ("⚠️ 분석 실패 안내", err_content)
+        st.rerun()
+
+    # [기능 2] 스마트 한국어 대기 안내 (사이드바 박제 대신 정돈된 위젯 사용)
+    if st.session_state.last_error_time and st.session_state.api_status == "QUOTA_EXCEEDED":
+        elapsed = time.time() - st.session_state.last_error_time
+        remaining = int(st.session_state.retry_wait_time - elapsed)
+        if remaining > 0:
+            st.sidebar.warning(f"⏳ 과부하로 인해 **{remaining}초 후** 다시 요청 가능")
+        else:
+            st.session_state.last_error_time = None
+            st.session_state.api_status = "READY"
+
+    # [기능 3] 결과 보기 버튼 (과거에 성공했던 데이터가 있다면 상시 보존되어 대기)
+    if st.session_state.stored_report:
+        st.sidebar.success("✅ 최근 성공 리포트 보관 중")
+        if st.sidebar.button("📄 최근 분석 결과 보기", use_container_width=True):
+            st.session_state.trigger_popup = ("📊 AI 종합 마켓 분석 리포트", st.session_state.stored_report)
+            st.rerun()
+
+    # [기능 4] 팝업 관리자 (Streamlit의 렌더링 꼬임 방지)
+    if 'trigger_popup' in st.session_state and st.session_state.trigger_popup:
+        title, content = st.session_state.trigger_popup
+        st.session_state.trigger_popup = None  # 단발성 소모
+        show_report_popup(title, content)
 
 
 @st.dialog("종목 상세 분석 및 재무 상태", width="large")
@@ -488,6 +535,8 @@ if __name__ == "__main__":
                                  color_discrete_sequence=px.colors.sequential.Mint)
                 st.plotly_chart(fig_nps, use_container_width=True, key="nps_final_chart")
                 st.dataframe(df_nps.set_index("Ticker").T, use_container_width=True)
+
+    run_sidebar_logic(news_list, growth, macro_growth, sector_df)
 
     # =========================
     # 📊 자산 차트
@@ -1586,65 +1635,6 @@ with summary_col4:
 
 
 # =========================
-# 🛠️ 제미나이 분석 버튼
-# =========================
-
-    # --- 팝업 함수 (파일 상단 함수 정의 구역에 배치) ---
-    # 1. 먼저 팝업창(Dialog) 함수를 정의합니다 (파일 상단 함수 정의 구역에 배치)
-    @st.dialog("📊 Gemini AI 종합 마켓 리포트", width="large")
-    def show_ai_report_popup(content):
-        st.markdown(content)
-        if st.button("리포트 닫기"):
-            st.rerun()
-
-    if 'ai_status' not in st.session_state:
-        st.session_state.ai_status = "ready"  # ready, processing, complete
-    if 'ai_result' not in st.session_state:
-        st.session_state.ai_result = ""
-
-    # 2. 사이드바 알림 센터 로직 (기존 사이드바 코드 교체)
-    with st.sidebar:
-        st.markdown("---")
-        st.subheader("🔔 AI 분석 알림함")
-
-        # 분석 시작 버튼
-        if st.button("🚀 마켓 분석 예약", use_container_width=True):
-            st.session_state.ai_status = "processing"
-            st.rerun()
-
-        # 백그라운드 분석 진행 (상태가 processing일 때)
-        if st.session_state.ai_status == "processing":
-            with st.status("🛠️ AI 비서가 데이터를 분석 중입니다...", expanded=False):
-                st.write("실시간 시황 및 매크로 지표 분석 중...")
-
-                # 분석 함수 호출
-                report = get_ai_macro_analysis(
-                    #news_list=news_list,
-                    market_data=growth,
-                    macro_data=macro_growth,
-                    sector_data=sector_df if 'sector_df' in locals() else None
-                )
-
-                st.session_state.ai_result = report
-                st.session_state.ai_status = "complete"
-                st.rerun()
-
-        # 분석 완료 후 알림 UI
-        if st.session_state.ai_status == "complete":
-            st.success("✅ 분석 리포트가 도착했습니다!")
-            # [핵심] 클릭 시 팝업을 띄우는 버튼
-            if st.button("📩 리포트 열어보기", use_container_width=True, type="primary"):
-                show_ai_report_popup(st.session_state.ai_result)
-
-            if st.button("알림 삭제", use_container_width=True):
-                st.session_state.ai_status = "ready"
-                st.session_state.ai_result = ""
-                st.rerun()
-
-        elif st.session_state.ai_status == "ready":
-            st.caption("분석 예약 버튼을 누르면 백그라운드에서 작업이 시작됩니다.")
-
-# =========================
 # 📰 5. 뉴스 분석 (링크 포함)
 # =========================
 st.markdown("## 📰 AI 뉴스 분석")
@@ -1773,6 +1763,7 @@ for i, (kr_name, en_keyword) in enumerate(global_keywords.items()):
                     st.info(f"**AI 번역 요약:** {news['summary']}")
                     st.markdown(f"🔗 [기사 원문 읽기]({news['link']})")
         st.markdown("---")
+
 
 
 # =========================
