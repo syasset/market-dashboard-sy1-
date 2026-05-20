@@ -1,4 +1,5 @@
 import plotly.graph_objects as go
+import plotly.express as pximport plotly.graph_objects as go
 import plotly.express as px
 import feedparser
 import urllib.parse
@@ -26,9 +27,10 @@ if 'news_list' not in locals():
 
 st_autorefresh(interval=3 * 60 * 1000, key="data_refresh")
 
-#==========================
- # 제미나이 분석 체계 기획
-#==========================
+
+# ==========================
+# 제미나이 분석 체계 기획
+# ==========================
 # 1. 제미나이 엔진 (문자열을 절대로 리턴하지 않음 -> 사이드바 출력 원천 봉쇄)
 def get_ai_macro_analysis(news_list=None, market_data=None, macro_data=None, sector_df=None, limit=None):
     try:
@@ -43,11 +45,11 @@ def get_ai_macro_analysis(news_list=None, market_data=None, macro_data=None, sec
         prompt = f"""
         당신은 글로벌 자산운용사의 수석 투자 전략가입니다.
         아래 참고 데이터인 뉴스 데이터와 시장 지표를 직접 서칭하고 분석 결과를 전문가 의견을 도출하세요.
-        
+
         [참고 데이터]
         뉴스: 금리, 전쟁, 오일쇼크, 신기술 개발(양자역학, 휴머노이드, UAM 등), 패권, 인수 합병, 협약, 나스닥, 다우존스, S&P500, 코스피, 코스닥, 환율 등
         지표: 매크로 경제, 미국 2년 부채, 미국 10년 부채, 달러인덱스, 고용지표, 한국 부채, 나스닥, 다우존스, S&P500, 코스피, 코스닥, 환율 등
-        
+
         [필수 포함 내용]
         1. 갑작스런 지수 등락 시 뉴스 및 지표의 키워드 등을 활용한 원인을 분석하고 대답해주세요.(실제 급등락 발생 시)
         2. 핵심 시황 진단: 현재 시장의 가장 큰 테마와 리스크 요인을 분석하세요.
@@ -97,58 +99,79 @@ def show_report_popup(title, content):
         st.rerun()
 
 
-# 3. 사이드바 UI 로직 (완성도 개념을 탑재한 클린 UI)
+# ==========================================
+# 3. 사이드바 UI 로직 (비동기 스레딩 & 영구 보존 메모리 매니저)
+# ==========================================
+import threading
+
+# F5 새로고침 및 단말기 세션 갱신에도 보존되는 전역 영구 저장소 (조건문 3 충족)
+if not hasattr(st, "_stored_report_cache"):
+    st._stored_report_cache = ""
+if not hasattr(st, "_api_status_cache"):
+    st._api_status_cache = "READY"
+if not hasattr(st, "_error_detail_cache"):
+    st._error_detail_cache = ""
+
+
 def run_sidebar_logic(news_list, growth, macro_growth, sector_df):
     st.sidebar.markdown("---")
     st.sidebar.subheader("🤖 AI 인텔리전스")
 
-    # 세션 상태 변수 초기화 (이전 결과물은 에러가 나도 절대 건드리지 않고 보존)
-    if 'stored_report' not in st.session_state: st.session_state.stored_report = ""
-    if 'api_status' not in st.session_state: st.session_state.api_status = "READY"
-    if 'retry_wait_time' not in st.session_state: st.session_state.retry_wait_time = 0
-    if 'last_error_time' not in st.session_state: st.session_state.last_error_time = None
-    if 'error_detail' not in st.session_state: st.session_state.error_detail = ""
+    # 세션 상태 변수가 없으면 영구 저장소의 값으로 초기화 (F5 방어 및 연동)
+    if 'stored_report' not in st.session_state:
+        st.session_state.stored_report = st._stored_report_cache
+    if 'api_status' not in st.session_state:
+        st.session_state.api_status = st._api_status_cache
+    if 'error_detail' not in st.session_state:
+        st.session_state.error_detail = st._error_detail_cache
+    if 'is_analyzing' not in st.session_state:
+        st.session_state.is_analyzing = False
+
+    # 백그라운드에서 구글 API를 실행할 비동기 래퍼 함수 (조건문 5 충족)
+    def bg_analysis_worker():
+        try:
+            # 오직 이 버튼 로직을 통해서만 분석이 수행됨 (조건문 1 충족)
+            get_global_news_ai(news_list, growth, macro_growth, sector_df, limit=12)
+            # 완료 후 전역 캐시와 세션에 결과 저장
+            st._stored_report_cache = st.session_state.stored_report
+            st._api_status_cache = st.session_state.api_status
+        except Exception as e:
+            st._api_status_cache = "SERVER_ERROR"
+            st._error_detail_cache = str(e)
+            st.session_state.api_status = "SERVER_ERROR"
+            st.session_state.error_detail = str(e)
+        finally:
+            st._is_analyzing_cache = False
 
     # [기능 1] 마켓 분석 예약 버튼
-    if st.sidebar.button("🚀 마켓 분석 예약", use_container_width=True):
-        with st.sidebar.status("데이터 분석 중...", expanded=False) as status:
-            # ⚠️ 이제 이 함수는 아무것도 리턴하지 않고 세션만 바꿉니다.
-            # 외부에서 st.write(result)를 수행하더라도 무조건 None이므로 사이드바에 글자가 안 찍힙니다.
-            get_global_news_ai(news_list, growth, macro_growth, sector_df, limit=12)
+    if not st.session_state.is_analyzing:
+        if st.sidebar.button("🚀 마켓 분석 예약", use_container_width=True):
+            st.session_state.is_analyzing = True
+            # 백그라운드 스레드를 생성하여 구글 API를 겟(Get)하므로 메인 화면이 멈추지 않음
+            thr = threading.Thread(target=bg_analysis_worker)
+            thr.start()
+            st.toast("🦁 백그라운드에서 구글 AI 마켓 분석이 예약되었습니다. 다른 작업을 계속 진행하실 수 있습니다!")
+            st.rerun()
+    else:
+        st.sidebar.info("⏳ 구글 AI가 백그라운드에서 분석 중입니다... (대시보드 이용 가능)")
+        if st.sidebar.button("🔄 분석 상태 새로고침", use_container_width=True):
+            # 세션 상태와 전역 캐시를 동기화하여 실시간 반영
+            st.session_state.stored_report = st._stored_report_cache
+            st.session_state.api_status = st._api_status_cache
+            st.session_state.error_detail = st._error_detail_cache
+            st.rerun()
 
-            if st.session_state.api_status == "SUCCESS":
-                status.update(label="분석 완료!", state="complete")
-                # 성공 시 즉시 팝업 노출하도록 트리거 설정
-                st.session_state.trigger_popup = ("📊 AI 종합 마켓 분석 리포트", st.session_state.stored_report)
-            else:
-                status.update(label="분석 일시적 실패", state="error")
-                # 에러 발생 시 에러 전용 팝업창 트리거 설정
-                err_content = f"🚨 **구글 API 호출 과부하 (429 할당량 초과)**\n\n지정된 대기 시간이 지난 후 다시 분석을 요청해주세요.\n\n---\n**[에러 원문]**\n{st.session_state.error_detail}"
-                st.session_state.trigger_popup = ("⚠️ 분석 실패 안내", err_content)
-        st.rerun()
-
-    # [기능 2] 스마트 한국어 대기 안내 (사이드바 박제 대신 정돈된 위젯 사용)
-    if st.session_state.last_error_time and st.session_state.api_status == "QUOTA_EXCEEDED":
-        elapsed = time.time() - st.session_state.last_error_time
-        remaining = int(st.session_state.retry_wait_time - elapsed)
-        if remaining > 0:
-            st.sidebar.warning(f"⏳ 과부하로 인해 **{remaining}초 후** 다시 요청 가능")
-        else:
-            st.session_state.last_error_time = None
-            st.session_state.api_status = "READY"
-
-    # [기능 3] 결과 보기 버튼 (과거에 성공했던 데이터가 있다면 상시 보존되어 대기)
+    # [기능 2] 분석 결과 보기 버튼 (오직 이 버튼을 눌렀을 때만 팝업창을 제어함 - 조건문 2, 3 충족)
     if st.session_state.stored_report:
         st.sidebar.success("✅ 최근 성공 리포트 보관 중")
         if st.sidebar.button("📄 최근 분석 결과 보기", use_container_width=True):
-            st.session_state.trigger_popup = ("📊 AI 종합 마켓 분석 리포트", st.session_state.stored_report)
-            st.rerun()
+            show_report_popup("📊 AI 종합 마켓 분석 리포트", st.session_state.stored_report)
 
-    # [기능 4] 팝업 관리자 (Streamlit의 렌더링 꼬임 방지)
-    if 'trigger_popup' in st.session_state and st.session_state.trigger_popup:
-        title, content = st.session_state.trigger_popup
-        st.session_state.trigger_popup = None  # 단발성 소모
-        show_report_popup(title, content)
+    elif st.session_state.api_status in ["QUOTA_EXCEEDED", "SERVER_ERROR"]:
+        st.sidebar.error("⚠️ 분석 실패 기록 존재")
+        if st.sidebar.button("🚨 에러 내용 보기", use_container_width=True):
+            err_content = f"🚨 **구글 API 호출 오류**\n\n할당량 초과 또는 서버 불안정 현상입니다. 잠시 후 다시 분석을 요청해주세요.\n\n---\n**[에러 원문]**\n{st.session_state.error_detail}"
+            show_report_popup("⚠️ 분석 실패 안내", err_content)
 
 
 @st.dialog("종목 상세 분석 및 재무 상태", width="large")
@@ -308,84 +331,84 @@ def show_stock_detail(ticker, name, df_krw):
 
             # --- 4번 탭: AI 저평가 진단 ---
         with tab4:
-                if info_dict and len(info_dict) > 0:
-                    st.markdown("#### 🔍 분석 엔진 가동: 투자 매력도 산출")
+            if info_dict and len(info_dict) > 0:
+                st.markdown("#### 🔍 분석 엔진 가동: 투자 매력도 산출")
 
-                    # 1. 지표 추출 (데이터가 없을 경우를 대비해 0이나 None 처리)
-                    per = info_dict.get('trailingPE')
-                    pbr = info_dict.get('priceToBook')
-                    roe = info_dict.get('returnOnEquity')
-                    peg = info_dict.get('priceToEarningsGrowthRatio')
+                # 1. 지표 추출 (데이터가 없을 경우를 대비해 0이나 None 처리)
+                per = info_dict.get('trailingPE')
+                pbr = info_dict.get('priceToBook')
+                roe = info_dict.get('returnOnEquity')
+                peg = info_dict.get('priceToEarningsGrowthRatio')
 
-                    score = 0
-                    analysis_logs = []
+                score = 0
+                analysis_logs = []
 
-                    # 2. 로직 분석 (각 지표가 존재할 때만 계산)
-                    # 가치 평가 (Value)
-                    if per is not None:
-                        if per < 15:
-                            score += 25
-                            analysis_logs.append("✅ **PER:** 이익 가치 대비 저평가 상태입니다.")
-                        elif per > 30:
-                            analysis_logs.append("⚠️ **PER:** 이익 대비 주가가 다소 고평가되어 있습니다.")
-                    else:
-                        analysis_logs.append("⚪ **PER:** 데이터가 없어 가치 분석을 건너뜁니다.")
-
-                    if pbr is not None:
-                        if pbr < 1.0:
-                            score += 25
-                            analysis_logs.append("✅ **PBR:** 장부상 자산 가치보다 주가가 낮습니다.")
-                    else:
-                        analysis_logs.append("⚪ **PBR:** 자산 가치 데이터가 없습니다.")
-
-                    # 수익성 평가 (Profitability)
-                    if roe is not None:
-                        if roe > 0.15:
-                            score += 25
-                            analysis_logs.append("✅ **ROE:** 자기자본 활용 능력이 매우 우수합니다.")
-                    else:
-                        analysis_logs.append("⚪ **ROE:** 수익성 데이터가 확인되지 않습니다.")
-
-                    # 성장성 평가 (Growth)
-                    if peg is not None:
-                        if peg < 1.0:
-                            score += 25
-                            analysis_logs.append("✅ **PEG:** 성장성 대비 주가가 매우 합리적입니다.")
-                    else:
-                        analysis_logs.append("⚪ **PEG:** 성장성 지표(PEG)가 제공되지 않습니다.")
-
-                    # 3. 결과 시각화
-                    st.divider()
-                    c1, c2 = st.columns([1, 2])
-
-                    with c1:
-                        # 점수에 따른 상태 및 색상 결정
-                        if score >= 75:
-                            st.success(f"### 분석 결과: **강력 저평가**")
-                        elif score >= 50:
-                            st.warning(f"### 분석 결과: **적정 가치**")
-                        else:
-                            st.error(f"### 분석 결과: **고평가 주의**")
-
-                        # 게이지 차트 대신 간단한 메트릭 표시
-                        st.metric("종합 투자 점수", f"{score} / 100")
-                        st.progress(score / 100)  # 시각적 바 추가
-
-                    with c2:
-                        st.markdown("##### 📝 세부 분석 리포트")
-                        if not analysis_logs:
-                            st.write("분석할 수 있는 재무 데이터가 충분하지 않습니다.")
-                        else:
-                            for log in analysis_logs:
-                                st.write(log)
-
-                    st.divider()
-                    st.caption("※ 본 진단은 야후 파이낸스 기본 지표를 활용한 통계적 가이드이며, 실제 투자는 개별 기업의 시장 점유율과 매크로 환경을 모두 고려해야 합니다.")
+                # 2. 로직 분석 (각 지표가 존재할 때만 계산)
+                # 가치 평가 (Value)
+                if per is not None:
+                    if per < 15:
+                        score += 25
+                        analysis_logs.append("✅ **PER:** 이익 가치 대비 저평가 상태입니다.")
+                    elif per > 30:
+                        analysis_logs.append("⚠️ **PER:** 이익 대비 주가가 다소 고평가되어 있습니다.")
                 else:
-                    st.error("❌ 해당 종목의 상세 재무 정보를 불러오지 못했습니다. (야후 서버 응답 없음)")
+                    analysis_logs.append("⚪ **PER:** 데이터가 없어 가치 분석을 건너뜁니다.")
+
+                if pbr is not None:
+                    if pbr < 1.0:
+                        score += 25
+                        analysis_logs.append("✅ **PBR:** 장부상 자산 가치보다 주가가 낮습니다.")
+                else:
+                    analysis_logs.append("⚪ **PBR:** 자산 가치 데이터가 없습니다.")
+
+                # 수익성 평가 (Profitability)
+                if roe is not None:
+                    if roe > 0.15:
+                        score += 25
+                        analysis_logs.append("✅ **ROE:** 자기자본 활용 능력이 매우 우수합니다.")
+                else:
+                    analysis_logs.append("⚪ **ROE:** 수익성 데이터가 확인되지 않습니다.")
+
+                # 성장성 평가 (Growth)
+                if peg is not None:
+                    if peg < 1.0:
+                        score += 25
+                        analysis_logs.append("✅ **PEG:** 성장성 대비 주가가 매우 합리적입니다.")
+                else:
+                    analysis_logs.append("⚪ **PEG:** 성장성 지표(PEG)가 제공되지 않습니다.")
+
+                # 3. 결과 시각화
+                st.divider()
+                c1, c2 = st.columns([1, 2])
+
+                with c1:
+                    # 점수에 따른 상태 및 색상 결정
+                    if score >= 75:
+                        st.success(f"### 분석 결과: **강력 저평가**")
+                    elif score >= 50:
+                        st.warning(f"### 분석 결과: **적정 가치**")
+                    else:
+                        st.error(f"### 분석 결과: **고평가 주의**")
+
+                    # 게이지 차트 대신 간단한 메트릭 표시
+                    st.metric("종합 투자 점수", f"{score} / 100")
+                    st.progress(score / 100)  # 시각적 바 추가
+
+                with c2:
+                    st.markdown("##### 📝 세부 분석 리포트")
+                    if not analysis_logs:
+                        st.write("분석할 수 있는 재무 데이터가 충분하지 않습니다.")
+                    else:
+                        for log in analysis_logs:
+                            st.write(log)
+
+                st.divider()
+                st.caption("※ 본 진단은 야후 파이낸스 기본 지표를 활용한 통계적 가이드이며, 실제 투자는 개별 기업의 시장 점유율과 매크로 환경을 모두 고려해야 합니다.")
+            else:
+                st.error("❌ 해당 종목의 상세 재무 정보를 불러오지 못했습니다. (야후 서버 응답 없음)")
+
 
 st.set_page_config(layout="wide", page_title="AI Financial Dashboard")
-
 
 # =========================
 # 📊 섹터 매핑 설정
@@ -484,6 +507,7 @@ def load_all_data():
     macro = raw_close[valid_macro_tickers].rename(columns=m_tickers)
 
     return data, macro, data_volume_indices
+
 
 # 데이터 실행
 data, macro, data_volume_indices = load_all_data()
@@ -903,7 +927,6 @@ if not macro_growth.empty:
         except Exception as e:
             st.error(f"실행 오류: {e}")
 
-
     # 2. 날짜 매칭 로직 (기존 로직 유지)
     target_date = available_dates[(available_dates.year == sel_y) &
                                   (available_dates.month == sel_m) &
@@ -918,7 +941,6 @@ if not macro_growth.empty:
 
     # 3. 메인 화면 상단에 현재 조회 중인 날짜 표시 (선택 사항)
     st.markdown(f"### 📊 분석 기준일: `{actual_valid_date.strftime('%Y-%m-%d')}`")
-
 
     # (B) 기간 설정 UI
     period = st.selectbox("기간설정", ["7일", "1개월", "6개월", "1년"], key="sector_period_selector")
@@ -1079,7 +1101,6 @@ if not macro_growth.empty:
     # 📅 날짜 선택 및 상호 동기화 로직
     # =========================
 
-
     # 날짜가 바뀌었을 때 섹터 상세창을 초기화하고 싶다면 아래 주석을 해제하세요.
     # if "last_date" not in st.session_state or st.session_state.last_date != actual_valid_date:
     #     st.session_state.clicked_sector = None
@@ -1198,7 +1219,6 @@ if not macro_growth.empty:
                         pct_change = diff_pct[key]
                         st.metric(label="전일대비", value=f"{diff_amt[key]:+,.0f} ₩", delta=f"{pct_change:+.2f}%")
 
-
         # 4. 하단 환율 정보
         st.divider()
         prev_fx = float(data.loc[available_dates[date_idx - 1], "USDKRW"])
@@ -1214,9 +1234,10 @@ if not macro_growth.empty:
     else:
         st.warning("첫 번째 데이터 날짜이므로 전일 대비 증감 분석이 불가능합니다.")
 
-# =========================
-# 🧠 3. AI 분석 엔진 (속도 최적화)
-# =========================
+
+    # =========================
+    # 🧠 3. AI 분석 엔진 (속도 최적화)
+    # =========================
     def analyze_trend_fast(ticker_name, df, target_idx):
         # 분석에 필요한 최소한의 윈도우만 가져옴 (최대 120일)
         start_pos = max(0, target_idx - 120)
@@ -1316,6 +1337,7 @@ if not macro_growth.empty:
     # =========================================================
     import plotly.express as px
     import plotly.graph_objects as go
+
 
     def render_v81_verification_mode():
         # 1. 데이터 로드 (전역 변수에서 안전하게 가져오기)
@@ -1419,9 +1441,9 @@ if not macro_growth.empty:
                     'steps': [
                         {'range': [-3, -1], 'color': "#E74C3C"},  # 공포: -3에서 -1까지
                         {'range': [-1, 1], 'color': "#F1C40F"},  # 중립: -1에서 1까지
-                        {'range':[1, 3], 'color': "#2ECC71"}  # 탐욕: 1에서 3까지
-            ]
-            }
+                        {'range': [1, 3], 'color': "#2ECC71"}  # 탐욕: 1에서 3까지
+                    ]
+                }
             ))
             gauge.update_layout(height=260, margin=dict(t=50, b=0, l=30, r=30))
             st.plotly_chart(gauge, use_container_width=True)
@@ -1469,6 +1491,7 @@ if not macro_growth.empty:
                 )
             else:
                 st.info("선택된 섹터의 종목 데이터를 찾을 수 없습니다.")
+
 
     # 함수 실행
     render_v81_verification_mode()
@@ -1541,7 +1564,6 @@ if not macro_growth.empty:
     # ---------------------------------------------------------
     render_sector_specific_correlation()
 
-
     # =========================
     # 📈 4. AI 분석 리포트 & 기상도
     # =========================
@@ -1549,7 +1571,7 @@ if not macro_growth.empty:
     st.markdown(f"## 🤖 AI Multi-Asset Trend Report")
 
     # [수정] date_idx가 정의되어 있어야 합니다. (앞선 날짜 선택 로직에서 정의됨)
-    analysis_targets = ["Dow Jones", "NASDAQ","S&P500", "Bitcoin", "Gold","KOSPI", "KOSDAQ", "WTI", "Natural Gas"]
+    analysis_targets = ["Dow Jones", "NASDAQ", "S&P500", "Bitcoin", "Gold", "KOSPI", "KOSDAQ", "WTI", "Natural Gas"]
     trend_results = []
     for t in analysis_targets:
         if t in data.columns:
@@ -1565,7 +1587,6 @@ if not macro_growth.empty:
 
         # 3. 형식을 맞춘 후 인덱스를 찾습니다.
         s_idx = sector_df.index.get_indexer([target_date], method='nearest')[0]
-
 
         for s_name in sector_df.columns:
             res = analyze_trend_fast(s_name, sector_df, s_idx)
@@ -1588,7 +1609,6 @@ if not macro_growth.empty:
                 st.error("#### AI 시장 진단\n리스크 관리가 필요한 **약세장**입니다.")
             else:
                 st.info("#### AI 시장 진단\n방향성을 탐색 중인 **박스권/혼조세**입니다.")
-
 
 # =========================================================
 # 💡 [중요] 에러 해결: 대시보드에서 사용할 데이터를 먼저 정의합니다.
@@ -1632,7 +1652,6 @@ with summary_col4:
     # row_growth 기반 최저 자산 (에러 지점 해결)
     worst_asset = row_growth.idxmin()
     st.metric("Worst Asset", worst_asset, delta=f"{row_growth[worst_asset]:.2f}%", delta_color="inverse")
-
 
 # =========================
 # 📰 5. 뉴스 분석 (링크 포함)
@@ -1765,7 +1784,6 @@ for i, (kr_name, en_keyword) in enumerate(global_keywords.items()):
         st.markdown("---")
 
 
-
 # =========================
 #  하락패턴
 # =========================
@@ -1773,19 +1791,26 @@ for i, (kr_name, en_keyword) in enumerate(global_keywords.items()):
 def draw_danger_chart(pattern_type):
     # 1. 패턴별 맞춤 가격 데이터 (30개씩)
     if pattern_type == "Head & Shoulders":
-        prices = [100, 105, 110, 105, 115, 125, 115, 105, 110, 103, 95, 90, 88, 85, 83, 82, 81, 80, 79, 78, 77, 76, 75, 74, 73, 72, 71, 70, 69, 68]
+        prices = [100, 105, 110, 105, 115, 125, 115, 105, 110, 103, 95, 90, 88, 85, 83, 82, 81, 80, 79, 78, 77, 76, 75,
+                  74, 73, 72, 71, 70, 69, 68]
     elif pattern_type == "Dead Cross":
-        prices = [120, 118, 115, 112, 110, 108, 105, 103, 100, 98, 95, 92, 88, 85, 82, 80, 78, 75, 72, 70, 68, 65, 63, 60, 58, 55, 53, 50, 48, 45]
+        prices = [120, 118, 115, 112, 110, 108, 105, 103, 100, 98, 95, 92, 88, 85, 82, 80, 78, 75, 72, 70, 68, 65, 63,
+                  60, 58, 55, 53, 50, 48, 45]
     elif pattern_type == "Double Top":
-        prices = [90, 110, 125, 110, 95, 110, 125, 110, 90, 85, 80, 78, 75, 73, 70, 68, 65, 63, 61, 60, 58, 55, 53, 50, 48, 46, 44, 42, 40, 38]
+        prices = [90, 110, 125, 110, 95, 110, 125, 110, 90, 85, 80, 78, 75, 73, 70, 68, 65, 63, 61, 60, 58, 55, 53, 50,
+                  48, 46, 44, 42, 40, 38]
     elif pattern_type == "Bear Flag":
-        prices = [90, 110, 125, 110, 95, 110, 125, 110, 90, 85, 80, 78, 75, 73, 70, 68, 65, 63, 61, 60, 58, 55, 53, 50, 48, 46, 44, 42, 40, 38]
+        prices = [90, 110, 125, 110, 95, 110, 125, 110, 90, 85, 80, 78, 75, 73, 70, 68, 65, 63, 61, 60, 58, 55, 53, 50,
+                  48, 46, 44, 42, 40, 38]
     elif pattern_type == "Descending Triangle":
-        prices = [120, 100, 110, 100, 105, 100, 102, 100, 95, 85, 75, 70, 68, 65, 63, 60, 58, 55, 53, 50, 48, 45, 43, 40, 38, 35, 33, 30, 28, 25]
+        prices = [120, 100, 110, 100, 105, 100, 102, 100, 95, 85, 75, 70, 68, 65, 63, 60, 58, 55, 53, 50, 48, 45, 43,
+                  40, 38, 35, 33, 30, 28, 25]
     elif pattern_type == "Dead Cat Bounce":
-        prices = [130, 100, 70, 50, 40, 55, 65, 55, 45, 35, 30, 28, 26, 24, 22, 20, 18, 16, 14, 12, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1]
+        prices = [130, 100, 70, 50, 40, 55, 65, 55, 45, 35, 30, 28, 26, 24, 22, 20, 18, 16, 14, 12, 10, 9, 8, 7, 6, 5,
+                  4, 3, 2, 1]
     else:
-        prices = [100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100]*30
+        prices = [100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100,
+                  100, 100, 100, 100, 100, 100, 100, 100, 100, 100] * 30
 
     x_range = list(range(len(prices)))
     df = pd.DataFrame({'Close': prices})
@@ -1831,6 +1856,7 @@ def draw_danger_chart(pattern_type):
         hovermode='x'
     )
     return fig
+
 
 st.title("⚠️ AI 기술적 분석 가이드: 하락 주의 패턴")
 st.markdown("현재 시장 상황에서 발생할 수 있는 주요 하락 패턴들을 분석합니다.")
@@ -1885,12 +1911,14 @@ for idx, (p_type, info) in enumerate(patterns_info.items()):
         st.warning(f"⚠️ **위험성:** {info['risk']}")
         st.divider()
 
-
 # =========================
 # 🔚 Footer
 # =========================
 # actual_date를 위에서 정의한 actual_valid_date로 변경
-st.markdown(f"<div style='text-align: center; color: gray; margin-top: 50px;'>🚀 v2.1 Optimized Dashboard | {actual_valid_date.strftime('%Y-%m-%d')}</div>", unsafe_allow_html=True)
+st.markdown(
+    f"<div style='text-align: center; color: gray; margin-top: 50px;'>🚀 v2.1 Optimized Dashboard | {actual_valid_date.strftime('%Y-%m-%d')}</div>",
+    unsafe_allow_html=True)
+
 
 
 
