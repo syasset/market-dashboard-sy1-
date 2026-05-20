@@ -1,0 +1,1895 @@
+import plotly.graph_objects as go
+import plotly.express as px
+import feedparser
+import urllib.parse
+from datetime import datetime, timedelta
+import pytz
+import re
+import html
+from urllib.parse import quote
+import requests
+from bs4 import BeautifulSoup
+import time
+import random
+import streamlit as st  # 이 줄이 반드시 있어야 합니다!
+import yfinance as yf
+import pandas as pd
+import numpy as np
+from streamlit_autorefresh import st_autorefresh
+import json
+from google import genai
+
+if 'sector_df' not in locals():
+    sector_df = pd.DataFrame()
+if 'news_list' not in locals():
+    news_list = []
+
+st_autorefresh(interval=3 * 60 * 1000, key="data_refresh")
+
+#==========================
+ # 제미나이 분석 체계 기획
+#==========================
+# 1. 제미나이 엔진 (문자열을 절대로 리턴하지 않음 -> 사이드바 출력 원천 봉쇄)
+def get_ai_macro_analysis(news_list=None, market_data=None, macro_data=None, sector_df=None, limit=None):
+    try:
+        # [교훈] 사용자 정답 경로 및 v1 명시 고정
+        client = genai.Client(
+            api_key=st.secrets["GEMINI_API_KEY"],
+            http_options={'api_version': 'v1'}
+        )
+
+        d_limit = limit if limit else 12
+        n_txt = "\n".join([str(n) for n in news_list[:d_limit]]) if news_list else "데이터 없음"
+        prompt = f"""
+        당신은 글로벌 자산운용사의 수석 투자 전략가입니다.
+        아래 참고 데이터인 뉴스 데이터와 시장 지표를 직접 서칭하고 분석 결과를 전문가 의견을 도출하세요.
+        
+        [참고 데이터]
+        뉴스: 금리, 전쟁, 오일쇼크, 신기술 개발(양자역학, 휴머노이드, UAM 등), 패권, 인수 합병, 협약, 나스닥, 다우존스, S&P500, 코스피, 코스닥, 환율 등
+        지표: 매크로 경제, 미국 2년 부채, 미국 10년 부채, 달러인덱스, 고용지표, 한국 부채, 나스닥, 다우존스, S&P500, 코스피, 코스닥, 환율 등
+        
+        [필수 포함 내용]
+        1. 갑작스런 지수 등락 시 뉴스 및 지표의 키워드 등을 활용한 원인을 분석하고 대답해주세요.(실제 급등락 발생 시)
+        2. 핵심 시황 진단: 현재 시장의 가장 큰 테마와 리스크 요인을 분석하세요.
+        3. 🎯 유망 종목 추천: 글로벌 시총 TOP 50 및 국내 우량주 기준 현재 상황에서 가장 수익성이 기대되는 5종목을 각각 선정하고 선정 이유를 설명하세요.
+        4. 전략 요약: 향후 투자 포지션에 대한 3줄 요약 가이드를 제시하세요.
+
+        """
+
+        response = client.models.generate_content(
+            model="models/gemini-2.5-flash",
+            contents=prompt
+        )
+
+        if response and response.text:
+            st.session_state.stored_report = response.text
+            st.session_state.api_status = "SUCCESS"
+        else:
+            st.session_state.api_status = "EMPTY"
+
+    except Exception as e:
+        err_msg = str(e)
+        # 429 과부하 에러일 경우 대기 초 추출
+        if "429" in err_msg:
+            retry_seconds = 60
+            match = re.search(r"retry in ([\d\.]+)s", err_msg)
+            if match:
+                retry_seconds = int(float(match.group(1)))
+            st.session_state.retry_wait_time = retry_seconds
+            st.session_state.last_error_time = time.time()
+            st.session_state.api_status = "QUOTA_EXCEEDED"
+            st.session_state.error_detail = err_msg
+        else:
+            st.session_state.api_status = "SERVER_ERROR"
+            st.session_state.error_detail = err_msg
+
+
+# ✅ 기존 시스템 간의 완벽한 호환성 연결
+get_global_news_ai = get_ai_macro_analysis
+
+
+# 2. 결과 및 에러 출력 공용 팝업창 (사이드바를 더럽히지 않는 유일한 소통 창구)
+@st.dialog("📊 AI 종합 마켓 분석 시스템", width="large")
+def show_report_popup(title, content):
+    st.subheader(title)
+    st.markdown(content)
+    if st.button("닫기"):
+        st.rerun()
+
+
+# 3. 사이드바 UI 로직 (완성도 개념을 탑재한 클린 UI)
+def run_sidebar_logic(news_list, growth, macro_growth, sector_df):
+    st.sidebar.markdown("---")
+    st.sidebar.subheader("🤖 AI 인텔리전스")
+
+    # 세션 상태 변수 초기화 (이전 결과물은 에러가 나도 절대 건드리지 않고 보존)
+    if 'stored_report' not in st.session_state: st.session_state.stored_report = ""
+    if 'api_status' not in st.session_state: st.session_state.api_status = "READY"
+    if 'retry_wait_time' not in st.session_state: st.session_state.retry_wait_time = 0
+    if 'last_error_time' not in st.session_state: st.session_state.last_error_time = None
+    if 'error_detail' not in st.session_state: st.session_state.error_detail = ""
+
+    # [기능 1] 마켓 분석 예약 버튼
+    if st.sidebar.button("🚀 마켓 분석 예약", use_container_width=True):
+        with st.sidebar.status("데이터 분석 중...", expanded=False) as status:
+            # ⚠️ 이제 이 함수는 아무것도 리턴하지 않고 세션만 바꿉니다.
+            # 외부에서 st.write(result)를 수행하더라도 무조건 None이므로 사이드바에 글자가 안 찍힙니다.
+            get_global_news_ai(news_list, growth, macro_growth, sector_df, limit=12)
+
+            if st.session_state.api_status == "SUCCESS":
+                status.update(label="분석 완료!", state="complete")
+                # 성공 시 즉시 팝업 노출하도록 트리거 설정
+                st.session_state.trigger_popup = ("📊 AI 종합 마켓 분석 리포트", st.session_state.stored_report)
+            else:
+                status.update(label="분석 일시적 실패", state="error")
+                # 에러 발생 시 에러 전용 팝업창 트리거 설정
+                err_content = f"🚨 **구글 API 호출 과부하 (429 할당량 초과)**\n\n지정된 대기 시간이 지난 후 다시 분석을 요청해주세요.\n\n---\n**[에러 원문]**\n{st.session_state.error_detail}"
+                st.session_state.trigger_popup = ("⚠️ 분석 실패 안내", err_content)
+        st.rerun()
+
+    # [기능 2] 스마트 한국어 대기 안내 (사이드바 박제 대신 정돈된 위젯 사용)
+    if st.session_state.last_error_time and st.session_state.api_status == "QUOTA_EXCEEDED":
+        elapsed = time.time() - st.session_state.last_error_time
+        remaining = int(st.session_state.retry_wait_time - elapsed)
+        if remaining > 0:
+            st.sidebar.warning(f"⏳ 과부하로 인해 **{remaining}초 후** 다시 요청 가능")
+        else:
+            st.session_state.last_error_time = None
+            st.session_state.api_status = "READY"
+
+    # [기능 3] 결과 보기 버튼 (과거에 성공했던 데이터가 있다면 상시 보존되어 대기)
+    if st.session_state.stored_report:
+        st.sidebar.success("✅ 최근 성공 리포트 보관 중")
+        if st.sidebar.button("📄 최근 분석 결과 보기", use_container_width=True):
+            st.session_state.trigger_popup = ("📊 AI 종합 마켓 분석 리포트", st.session_state.stored_report)
+            st.rerun()
+
+    # [기능 4] 팝업 관리자 (Streamlit의 렌더링 꼬임 방지)
+    if 'trigger_popup' in st.session_state and st.session_state.trigger_popup:
+        title, content = st.session_state.trigger_popup
+        st.session_state.trigger_popup = None  # 단발성 소모
+        show_report_popup(title, content)
+
+
+@st.dialog("종목 상세 분석 및 재무 상태", width="large")
+def show_stock_detail(ticker, name, df_krw):
+    # --- 데이터 로드 ---
+    @st.cache_data(ttl=86400)
+    def get_financial_info(t_code):
+        try:
+            t = yf.Ticker(t_code)
+            q_fin = t.quarterly_financials
+            info = t.info
+            return q_fin, info
+        except:
+            return None, None
+
+    q_fin_df, info_dict = get_financial_info(ticker)
+
+    # --- 상단 헤더 ---
+    col_title, col_price = st.columns([1.5, 1])
+    with col_title:
+        st.write(f"### {name} ({ticker})")
+
+    with col_price:
+        curr_price_krw = df_krw[ticker].dropna().iloc[-1] if ticker in df_krw.columns else 0
+        is_foreign = not any(ex in ticker.upper() for ex in [".KS", ".KQ"])
+
+        p_col1, p_col2 = st.columns(2)
+        p_col1.metric("현재가 (KRW)", f"{curr_price_krw:,.0f}원")
+        if is_foreign and info_dict:
+            curr_price_usd = info_dict.get('currentPrice') or info_dict.get('regularMarketPrice', 0)
+            p_col2.metric("현재가 (USD)", f"${curr_price_usd:,.2f}")
+
+    tab1, tab2, tab3, tab4 = st.tabs(["📈 주가 차트", "📊 분기 실적 요약", "💡 투자 지표", "🤖 AI 저평가 진단"])
+
+    # --- 1번 탭: 주가 차트 (호버 기능 강화) ---
+    with tab1:
+        valid_series = df_krw[ticker].dropna()
+        if len(valid_series) > 2:
+            lookback_days = st.slider("조회 기간 설정 (일)", 2, len(valid_series), min(30, len(valid_series)),
+                                      key=f"slider_{ticker}")
+
+            # 1. 원본 가격 데이터 및 수익률 계산
+            price_series = valid_series.iloc[-lookback_days:]
+            stock_growth = (price_series / price_series.iloc[0] - 1) * 100
+
+            # 2. 해외 종목인 경우 달러 가격 계산 (df_krw 생성 시 사용한 USDKRW 역산)
+            # 만약 전역 변수 'data'에 USDKRW가 있다면 가져와서 계산합니다.
+            usd_prices = None
+            if is_foreign and 'data' in globals() and 'USDKRW' in globals()['data'].columns:
+                exchange_rate = globals()['data']['USDKRW'].reindex(price_series.index, method='ffill')
+                usd_prices = price_series / exchange_rate
+
+            # 3. 차트 생성
+            fig = go.Figure()
+
+            # 호버에 표시할 데이터 묶기 (한화 가격, 달러 가격)
+            # customdata는 리스트의 리스트 형태로 넘겨야 합니다.
+            custom_data_list = [price_series.values]
+            hover_template_str = "날짜: %{x}<br><b>수익률: %{y:.2f}%</b><br>가격(KRW): %{customdata[0]:,.0f}원"
+
+            if usd_prices is not None:
+                custom_data_list.append(usd_prices.values)
+                hover_template_str += "<br>가격(USD): $%{customdata[1]:.2f}"
+
+            custom_data_final = np.stack(custom_data_list, axis=-1)
+
+            fig.add_trace(go.Scatter(
+                x=stock_growth.index,
+                y=stock_growth.values,
+                customdata=custom_data_final,
+                mode='lines',
+                line=dict(width=3, color='#00CC96'),
+                fill='tozeroy',
+                fillcolor='rgba(0, 204, 150, 0.1)',
+                hovertemplate=hover_template_str + "<extra></extra>"
+            ))
+
+            fig.update_layout(
+                template="plotly_dark",
+                height=400,
+                yaxis=dict(ticksuffix="%"),
+                margin=dict(t=20, b=20),
+                hovermode="x unified"
+            )
+            st.plotly_chart(fig, use_container_width=True)
+
+            # 하단 수익률 요약 텍스트
+            period_return = (price_series.iloc[-1] / price_series.iloc[0] - 1) * 100
+            st.write(
+                f"⏱ **최근 {lookback_days}일간 수익률:** :{'red' if period_return > 0 else 'blue'}[{period_return:+.2f}%]")
+        else:
+            st.warning("차트 데이터가 부족합니다.")
+
+    # --- 2번 탭: 분기 실적 요약 (QoQ, YoY 증감율) ---
+    with tab2:
+        if q_fin_df is not None and not q_fin_df.empty:
+            # 1. 필요 항목 추출 및 전치(Transpose)하여 시계열 순서로 정렬
+            items = {'Total Revenue': '매출액', 'Operating Income': '영업이익', 'Net Income': '당기순이익'}
+            available_items = [i for i in items.keys() if i in q_fin_df.index]
+
+            if available_items:
+                # 데이터를 행(항목), 열(날짜) -> 행(날짜), 열(항목)로 변경 후 날짜 오름차순 정렬
+                df = q_fin_df.loc[available_items].T.sort_index(ascending=True)
+                df = df.rename(columns=items)
+
+                # 2. 증감율 계산
+                # QoQ (직전 분기 대비): 현재 행 / 이전 행 - 1
+                qoq_change = df.pct_change(periods=1) * 100
+                # YoY (작년 동분기 대비): 현재 행 / 4개 이전 행 - 1
+                yoy_change = df.pct_change(periods=4) * 100
+
+                # 3. 최신 분기 데이터들만 역순으로(최신이 위로) 표시
+                latest_df = df.iloc[::-1].copy()
+
+                st.markdown("#### 📅 최근 분기별 실적 상세")
+
+                for col in df.columns:
+                    st.write(f"**📍 {col}**")
+
+                    # 수치, QoQ, YoY를 합친 데이터프레임 생성
+                    display_df = pd.DataFrame({
+                        '금액': latest_df[col].map(lambda x: f"{x:,.0f}" if pd.notnull(x) else "-"),
+                        '직전분기 대비(QoQ)': qoq_change[col].iloc[::-1].map(
+                            lambda x: f"{x:+.2f}%" if pd.notnull(x) else "-"),
+                        '전년동기 대비(YoY)': yoy_change[col].iloc[::-1].map(lambda x: f"{x:+.2f}%" if pd.notnull(x) else "-")
+                    })
+
+                    # 날짜 형식 예쁘게 변경 (Index가 날짜형일 경우)
+                    display_df.index = [d.strftime('%Y-%m') for d in display_df.index]
+
+                    st.table(display_df)
+            else:
+                st.write("항목 정보를 불러올 수 없습니다.")
+        else:
+            st.info("해당 종목의 분기 실적 데이터를 불러올 수 없습니다.")
+
+    # --- 3번 탭: 투자 지표 (기존 유지) ---
+    with tab3:
+        if info_dict:
+            st.markdown("#### 💎 주요 투자 지표")
+            per = info_dict.get('trailingPE', '-');
+            pbr = info_dict.get('priceToBook', '-');
+            roe = info_dict.get('returnOnEquity', '-')
+            if isinstance(roe, (int, float)): roe = f"{roe * 100:.2f}%"
+            if isinstance(per, (int, float)): per = f"{per:.2f}배"
+            if isinstance(pbr, (int, float)): pbr = f"{pbr:.2f}배"
+            c1, c2, c3 = st.columns(3)
+            c1.metric("PER", per);
+            c2.metric("PBR", pbr);
+            c3.metric("ROE", roe)
+            with st.expander("📝 추가 지표 확인"):
+                st.write(f"- 시가총액: {info_dict.get('marketCap', 0):,}")
+                st.write(
+                    f"- 52주 최고/최저: {info_dict.get('fiftyTwoWeekHigh', 0):,} / {info_dict.get('fiftyTwoWeekLow', 0):,}")
+        else:
+            st.info("투자 지표 데이터를 불러올 수 없습니다.")
+
+            # --- 4번 탭: AI 저평가 진단 ---
+        with tab4:
+                if info_dict and len(info_dict) > 0:
+                    st.markdown("#### 🔍 분석 엔진 가동: 투자 매력도 산출")
+
+                    # 1. 지표 추출 (데이터가 없을 경우를 대비해 0이나 None 처리)
+                    per = info_dict.get('trailingPE')
+                    pbr = info_dict.get('priceToBook')
+                    roe = info_dict.get('returnOnEquity')
+                    peg = info_dict.get('priceToEarningsGrowthRatio')
+
+                    score = 0
+                    analysis_logs = []
+
+                    # 2. 로직 분석 (각 지표가 존재할 때만 계산)
+                    # 가치 평가 (Value)
+                    if per is not None:
+                        if per < 15:
+                            score += 25
+                            analysis_logs.append("✅ **PER:** 이익 가치 대비 저평가 상태입니다.")
+                        elif per > 30:
+                            analysis_logs.append("⚠️ **PER:** 이익 대비 주가가 다소 고평가되어 있습니다.")
+                    else:
+                        analysis_logs.append("⚪ **PER:** 데이터가 없어 가치 분석을 건너뜁니다.")
+
+                    if pbr is not None:
+                        if pbr < 1.0:
+                            score += 25
+                            analysis_logs.append("✅ **PBR:** 장부상 자산 가치보다 주가가 낮습니다.")
+                    else:
+                        analysis_logs.append("⚪ **PBR:** 자산 가치 데이터가 없습니다.")
+
+                    # 수익성 평가 (Profitability)
+                    if roe is not None:
+                        if roe > 0.15:
+                            score += 25
+                            analysis_logs.append("✅ **ROE:** 자기자본 활용 능력이 매우 우수합니다.")
+                    else:
+                        analysis_logs.append("⚪ **ROE:** 수익성 데이터가 확인되지 않습니다.")
+
+                    # 성장성 평가 (Growth)
+                    if peg is not None:
+                        if peg < 1.0:
+                            score += 25
+                            analysis_logs.append("✅ **PEG:** 성장성 대비 주가가 매우 합리적입니다.")
+                    else:
+                        analysis_logs.append("⚪ **PEG:** 성장성 지표(PEG)가 제공되지 않습니다.")
+
+                    # 3. 결과 시각화
+                    st.divider()
+                    c1, c2 = st.columns([1, 2])
+
+                    with c1:
+                        # 점수에 따른 상태 및 색상 결정
+                        if score >= 75:
+                            st.success(f"### 분석 결과: **강력 저평가**")
+                        elif score >= 50:
+                            st.warning(f"### 분석 결과: **적정 가치**")
+                        else:
+                            st.error(f"### 분석 결과: **고평가 주의**")
+
+                        # 게이지 차트 대신 간단한 메트릭 표시
+                        st.metric("종합 투자 점수", f"{score} / 100")
+                        st.progress(score / 100)  # 시각적 바 추가
+
+                    with c2:
+                        st.markdown("##### 📝 세부 분석 리포트")
+                        if not analysis_logs:
+                            st.write("분석할 수 있는 재무 데이터가 충분하지 않습니다.")
+                        else:
+                            for log in analysis_logs:
+                                st.write(log)
+
+                    st.divider()
+                    st.caption("※ 본 진단은 야후 파이낸스 기본 지표를 활용한 통계적 가이드이며, 실제 투자는 개별 기업의 시장 점유율과 매크로 환경을 모두 고려해야 합니다.")
+                else:
+                    st.error("❌ 해당 종목의 상세 재무 정보를 불러오지 못했습니다. (야후 서버 응답 없음)")
+
+st.set_page_config(layout="wide", page_title="AI Financial Dashboard")
+
+
+# =========================
+# 📊 섹터 매핑 설정
+# =========================
+SECTOR_MAP = {
+    "Tech": {"themes": ["AI", "반도체", "클라우드", "소프트웨어", "데이터센터", "로봇"],
+             "anchors": {"NASDAQ": 0.6, "S&P500": 0.3, "KOSDAQ": 0.1}},
+    "Energy": {"themes": ["에너지", "정유", "LNG", "원유", "WTI", "천연가스"],
+               "anchors": {"WTI": 0.5, "Natural Gas": 0.3, "S&P500": 0.2}},
+    "GreenEnergy": {"themes": ["태양광", "풍력", "수소", "원자력", "2차전지"],
+                    "anchors": {"NASDAQ": 0.3, "KOSPI": 0.3, "KOSDAQ": 0.3, "S&P500": 0.1}},
+    "Crypto": {"themes": ["비트코인", "블록체인", "핀테크"], "anchors": {"Bitcoin": 0.8, "NASDAQ": 0.2}},
+    "Defensive": {"themes": ["금", "채권", "리츠", "유틸리티"], "anchors": {"Gold": 0.7, "S&P500": 0.2, "KOSPI": 0.1}},
+    "Industrial": {"themes": ["자동차", "전기차", "조선", "철강", "방산", "우주항공", "드론", "건설", "화학"],
+                   "anchors": {"S&P500": 0.4, "KOSPI": 0.4, "WTI": 0.1, "Natural Gas": 0.1}},
+    "Healthcare": {"themes": ["헬스케어", "제약", "바이오"], "anchors": {"NASDAQ": 0.4, "S&P500": 0.4, "KOSPI": 0.2}},
+    "Consumer": {"themes": ["항공", "여행", "카지노", "엔터", "미디어", "게임", "유통", "물류", "식품", "플랫폼", "교육"],
+                 "anchors": {"S&P500": 0.4, "KOSPI": 0.3, "KOSDAQ": 0.2, "NASDAQ": 0.1}},
+    "KoreaSpecial": {"themes": ["KOSPI대형주", "스마트팜"], "anchors": {"KOSPI": 0.7, "KOSDAQ": 0.3}}
+}
+
+# 📌 자산 정의 통합
+tickers = {
+    "Dow Jones": "^DJI", "NASDAQ": "^IXIC", "S&P500": "^GSPC", "Bitcoin": "BTC-USD",
+    "KOSPI": "^KS11", "KOSDAQ": "^KQ11", "Gold": "GC=F", "WTI": "CL=F",
+    "Natural Gas": "NG=F", "USDKRW": "USDKRW=X"
+}
+usd_assets = ["Dow Jones", "Bitcoin", "NASDAQ", "S&P500", "Gold", "WTI", "Natural Gas"]
+
+# 한국 시간대 설정
+korea_time = datetime.now(pytz.timezone("Asia/Seoul"))
+
+st.markdown(
+    f"<div style='text-align:right'>⏱ Last Update (KST): {korea_time.strftime('%Y-%m-%d %H:%M:%S')}</div>",
+    unsafe_allow_html=True
+)
+
+
+# ---------------------------------------------------------
+# 1. 거물들의 포트폴리오 (캐싱 적용)
+# ---------------------------------------------------------
+@st.cache_data(ttl=86400)
+def get_whale_portfolio():
+    try:
+        whale_data = {
+            "Berkshire": {"AAPL": 40.0, "AXP": 12.5, "BAC": 10.5, "KO": 9.0, "CVX": 8.0, "OXY": 5.0},
+            "NPS": {"MSFT": 6.5, "AAPL": 6.2, "NVDA": 5.8, "AMZN": 4.5, "GOOGL": 3.8, "META": 3.2}
+        }
+        return whale_data
+    except Exception as e:
+        st.error(f"데이터 로드 중 오류 발생: {e}")
+        return None
+
+
+# ---------------------------------------------------------
+# 2. 메인 데이터 로드 함수 (통합 및 최적화)
+# ---------------------------------------------------------
+@st.cache_data(ttl=600)
+def load_all_data():
+    # 1. 티커-이름 매핑 정의 (중복 티커 제거를 위해 구조 변경)
+    # ^IRX는 미국 3개월물 국채 수익률이므로 정확한 명칭으로 하나만 사용 권장
+    m_tickers = {
+        "^TNX": "US10Y",
+        "^IRX": "US_Rate_3M",  # ^IRX는 13주(3개월)물입니다. 2년물은 ^ZTR 등이지만 야후에서 제공이 불안정할 수 있음
+        "DX-Y.NYB": "DXY",
+        "272580.KS": "KR_Rate"
+    }
+
+    # 2. 데이터 다운로드
+    all_ticker_list = list(set(list(tickers.values()) + list(m_tickers.keys())))
+    raw_all = yf.download(all_ticker_list, start="2018-01-01", progress=False, threads=False)
+
+    if raw_all.empty:
+        return pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
+
+    # 종가 정리
+    raw_close = raw_all["Close"].ffill().bfill()
+    if isinstance(raw_close.columns, pd.MultiIndex):
+        raw_close = raw_close.droplevel(0, axis=1)
+
+    # [지수 데이터 처리]
+    ticker_to_name = {v: k for k, v in tickers.items()}
+    # tickers에 정의된 값이 실제 다운로드된 컬럼에 있는지 확인 후 추출
+    valid_indices = [v for v in tickers.values() if v in raw_close.columns]
+    data = raw_close[valid_indices].rename(columns=ticker_to_name)
+
+    # [거래량 데이터 처리]
+    raw_volume = raw_all["Volume"].ffill().fillna(0)
+    if isinstance(raw_volume.columns, pd.MultiIndex):
+        raw_volume = raw_volume.droplevel(0, axis=1)
+    data_volume_indices = raw_volume[valid_indices].rename(columns=ticker_to_name)
+
+    # [매크로 데이터 처리] - 이 부분이 에러의 핵심 해결 구간
+    # 존재하는 티커만 필터링하여 1:1로 이름을 변경함 (중복 발생 원천 차단)
+    valid_macro_tickers = [t for t in m_tickers.keys() if t in raw_close.columns]
+    macro = raw_close[valid_macro_tickers].rename(columns=m_tickers)
+
+    return data, macro, data_volume_indices
+
+# 데이터 실행
+data, macro, data_volume_indices = load_all_data()
+
+
+def calculate_growth(df):
+    if df.empty: return pd.DataFrame()
+    return (df / df.iloc[0] - 1) * 100
+
+
+growth = calculate_growth(data)
+macro_growth = calculate_growth(macro)
+
+# KRW 환산 시계열
+if not data.empty:
+    chart_data = data.drop(columns=["USDKRW"])
+    data_krw = chart_data.copy()
+    for col in usd_assets:
+        if col in chart_data.columns:
+            data_krw[col] = chart_data[col] * data["USDKRW"]
+else:
+    data_krw = pd.DataFrame()
+
+# ---------------------------------------------------------
+# 3. 메인 실행부
+# ---------------------------------------------------------
+if __name__ == "__main__":
+    st.write("")
+
+    with st.container():
+        st.markdown("---")
+        st.markdown("<h2 style='text-align: center;'>🐳 거물들의 포트폴리오 (Whale Tracking)</h2>", unsafe_allow_html=True)
+        whales = get_whale_portfolio()
+
+        if whales:
+            col_w1, col_w2 = st.columns(2)
+            with col_w1:
+                st.markdown("<h4 style='text-align: center;'>🇺🇸 Berkshire Hathaway</h4>", unsafe_allow_html=True)
+                df_bh = pd.DataFrame(list(whales["Berkshire"].items()), columns=["Ticker", "Weight"])
+                fig_bh = px.pie(df_bh, values="Weight", names="Ticker", hole=0.4,
+                                color_discrete_sequence=px.colors.sequential.RdBu)
+                st.plotly_chart(fig_bh, use_container_width=True, key="bh_final_chart")
+                st.dataframe(df_bh.set_index("Ticker").T, use_container_width=True)
+
+            with col_w2:
+                st.markdown("<h4 style='text-align: center;'>🇰🇷 National Pension Service</h4>", unsafe_allow_html=True)
+                df_nps = pd.DataFrame(list(whales["NPS"].items()), columns=["Ticker", "Weight"])
+                fig_nps = px.pie(df_nps, values="Weight", names="Ticker", hole=0.4,
+                                 color_discrete_sequence=px.colors.sequential.Mint)
+                st.plotly_chart(fig_nps, use_container_width=True, key="nps_final_chart")
+                st.dataframe(df_nps.set_index("Ticker").T, use_container_width=True)
+
+    run_sidebar_logic(news_list, growth, macro_growth, sector_df)
+
+    # =========================
+    # 📊 자산 차트
+    # =========================
+    st.markdown("## 🌍📊 지수, 섹터별 지표")
+    st.markdown(f"### 📈 지수차트")
+
+    if not growth.empty:
+        fig = go.Figure()
+
+        custom_colors = [
+            "#1f77b4", "#ff7f0e", "#2ca02c", "#d62728",
+            "#9467bd", "#8c564b", "#e377c2", "#7f7f7f",
+            "#bcbd22", "#17becf"
+        ]
+
+        last_points = []
+
+        # 1. 차트 선 그리기
+        for i, col in enumerate(growth.columns):
+            if col == "USDKRW":
+                continue
+
+            line_color = custom_colors[i % len(custom_colors)]
+
+            fig.add_trace(go.Scatter(
+                x=growth.index,
+                y=growth[col],
+                customdata=data_krw[col],
+                name=col,
+                mode='lines',
+                # [핵심 수정] 확대 시 선 굵기 고정 설정
+                line=dict(
+                    width=1,
+                    color=line_color
+                ),
+                # 확대해도 굵기가 변하지 않도록 하는 시각적 효과 (SVG 속성 활용)
+                marker=dict(line=dict(width=0)),
+                hovertemplate="📅 %{x|%Y-%m-%d}<br><b>%{fullData.name}</b><br>📈 %{y:.2f}%<br>💰 %{customdata:,.0f}<extra></extra>"
+            ))
+
+            last_points.append({
+                "col": col,
+                "y": growth[col].iloc[-1],
+                "val": data_krw[col].iloc[-1],
+                "color": line_color
+            })
+
+        # 모든 선에 대해 확대 시 굵기 변동 방지 강제 적용
+        fig.update_traces(line=dict(width=1))
+
+        # 2. 태그 로직 (기존 동일)
+        last_points.sort(key=lambda x: x['y'], reverse=True)
+
+        for i, p in enumerate(last_points):
+            is_right = i % 2 == 0
+            side_offset = 60 if is_right else -60
+            x_anchor = "left" if is_right else "right"
+
+            fig.add_annotation(
+                x=growth.index[-1],
+                y=p['y'],
+                text=f"<b>{p['col']}</b><br>{p['val']:,.0f}",
+                showarrow=True,
+                arrowhead=2,
+                arrowsize=1,
+                arrowwidth=1.5,
+                arrowcolor=p['color'],
+                ax=side_offset,
+                ay=0,
+                xanchor=x_anchor,
+                yanchor="middle",
+                font=dict(size=11, color="white"),
+                bgcolor=p['color'],
+                opacity=0.9,
+                bordercolor="white",
+                borderwidth=1,
+                borderpad=4
+            )
+
+        # 3. 레이아웃 설정
+        fig.update_layout(
+            template="plotly_dark",
+            dragmode="pan",
+            height=650,
+            # [핵심 수정] 확대 상태 유지 및 렌더링 최적화
+            uirevision='constant',
+            margin=dict(l=30, r=120, t=80, b=50),
+            showlegend=True,
+            legend=dict(
+                orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1
+            ),
+            xaxis=dict(
+                showgrid=False,
+                range=[growth.index[0], growth.index[-1] + pd.Timedelta(days=10)]
+            ),
+            yaxis=dict(
+                zeroline=True,
+                zerolinecolor="rgba(255,255,255,0.2)",
+                side="left"
+            )
+        )
+
+        st.plotly_chart(fig, use_container_width=True, config={"scrollZoom": True})
+
+# =========================
+# 🌍 매크로 차트
+# =========================
+st.markdown(f"### 📊 매크로(거시) 경제 차트")
+
+improved_colors = [
+    "#1f77b4", "#d62728", "#2ca02c", "#ff7f0e",
+    "#9467bd", "#17becf", "#e377c2", "#8c564b",
+    "#4169E1", "#008080"
+]
+
+if not macro_growth.empty:
+    fig2 = go.Figure()
+    last_points_macro = []
+
+    # 1. 차트 선 그리기 및 데이터 수집
+    for i, col in enumerate(macro_growth.columns):
+        line_color = improved_colors[i % len(improved_colors)]
+
+        fig2.add_trace(go.Scatter(
+            x=macro_growth.index,
+            y=macro_growth[col],
+            customdata=macro[col],
+            name=col,
+            mode='lines',
+            # [수정] 확대 시 선 굵기 뭉침 방지를 위해 고정 픽셀 느낌으로 설정
+            line=dict(
+                width=1,
+                color=line_color
+            ),
+            hovertemplate="📅 %{x|%Y-%m-%d}<br><b>%{fullData.name}</b><br>📈 %{y:.2f}%<br>💎 %{customdata:.2f}<extra></extra>"
+        ))
+
+        last_points_macro.append({
+            "col": col,
+            "y": macro_growth[col].iloc[-1],
+            "val": macro[col].iloc[-1],
+            "color": line_color
+        })
+
+    # 모든 매크로 선에 대해 선 굵기 고정 강제 적용
+    fig2.update_traces(line=dict(width=1))
+
+    # 2. Y축 정렬 및 태그 최적화
+    last_points_macro.sort(key=lambda x: x['y'], reverse=True)
+
+    for i, p in enumerate(last_points_macro):
+        is_right = i % 2 == 0
+        side_offset = 65 if is_right else -65
+        x_anchor = "left" if is_right else "right"
+
+        fig2.add_annotation(
+            x=macro_growth.index[-1],
+            y=p['y'],
+            text=f"<b>{p['col']}</b><br>{p['val']:.2f}",
+            showarrow=True,
+            arrowhead=2,
+            arrowsize=1,
+            arrowwidth=1.5,
+            arrowcolor=p['color'],
+            ax=side_offset,
+            ay=0,
+            xanchor=x_anchor,
+            yanchor="middle",
+            font=dict(size=11, color="white"),
+            bgcolor=p['color'],
+            opacity=0.9,
+            bordercolor="white",
+            borderwidth=1,
+            borderpad=4
+        )
+
+    # 3. 레이아웃 설정 (확대 고정 및 너비 최적화)
+    fig2.update_layout(
+        template="plotly_dark",
+        # [수정] 기본 동작을 '확대'가 아닌 '이동(Pan)'으로 설정 (모바일 드래그용)
+        dragmode="pan",
+        height=650,
+        uirevision='constant',
+        margin=dict(l=30, r=130, t=80, b=50),
+        showlegend=True,
+        legend=dict(
+            orientation="h",
+            yanchor="bottom",
+            y=1.02,
+            xanchor="right",
+            x=1,
+            font=dict(size=11)
+        ),
+        xaxis=dict(
+            showgrid=False,
+            # [추가] 고정 범위 설정이 아닌 유동적 범위를 위해 fixedrange 해제 (기본값)
+            range=[macro_growth.index, macro_growth.index[-1] + pd.Timedelta(days=15)]
+        ),
+        yaxis=dict(
+            zeroline=True,
+            zerolinecolor="rgba(255,255,255,0.2)",
+            title="수익률/변화율 (%)",
+            fixedrange=False  # Y축도 자유롭게 확대/축소 가능하게 설정
+        )
+    )
+
+    st.plotly_chart(fig2, use_container_width=True, config={
+        "scrollZoom": True,  # 마우스 휠 및 터치패드 줌 활성화
+        "displayModeBar": True,  # 상단 도구 모음 표시 (필요시 확대/축소 리셋 가능)
+        "modeBarButtonsToRemove": ["select2d", "lasso2d"],  # 불필요한 선택 도구 제거
+        "responsive": True  # 화면 크기 변화에 대응
+    })
+
+
+    # =========================
+    # 🏗️ 1. 데이터 로드 및 전처리 (최적화 버전)
+    # =========================
+    @st.cache_data(ttl=180)
+    def get_processed_sector_data(sector_map, start_dt, end_dt):
+        all_tickers = []
+        for v in sector_map.values():
+            all_tickers.extend(v["tickers"])
+        fx_ticker = "USDKRW=X"
+        download_list = list(set(all_tickers + [fx_ticker]))
+
+        # 오늘 날짜 확인 (실시간 데이터 여부 판단용)
+        today_str = datetime.now(pytz.timezone("Asia/Seoul")).strftime('%Y-%m-%d')
+        target_end_str = pd.to_datetime(end_dt).strftime('%Y-%m-%d')
+
+        # [핵심 수정] 오늘 데이터를 보는 경우와 과거 데이터를 보는 경우를 분리
+        if target_end_str >= today_str:
+            # 오늘 데이터를 포함해야 하므로 period를 넉넉히 잡거나 end를 내일로 설정
+            # 가장 깔끔한 방법은 end를 오늘+1일로 설정하는 것입니다.
+            actual_start = (pd.to_datetime(start_dt) - pd.Timedelta(days=5)).strftime('%Y-%m-%d')
+            actual_end = (pd.to_datetime(end_dt) + pd.Timedelta(days=1)).strftime('%Y-%m-%d')
+            raw = yf.download(download_list, start=actual_start, end=actual_end, progress=False, threads=True)
+        else:
+            # 과거 특정 시점 조회 시 (기존 로직 유지)
+            actual_start = (pd.to_datetime(start_dt) - pd.Timedelta(days=5)).strftime('%Y-%m-%d')
+            actual_end = (pd.to_datetime(end_dt) + pd.Timedelta(days=1)).strftime('%Y-%m-%d')
+            raw = yf.download(download_list, start=actual_start, end=actual_end, progress=False, threads=True)
+
+        if raw.empty or "Close" not in raw:
+            return pd.DataFrame(), pd.DataFrame()
+
+        # 데이터 정리
+        data_all = raw["Close"].ffill().bfill()
+
+        # 멀티인덱스 처리
+        if isinstance(data_all.columns, pd.MultiIndex):
+            data_all.columns = data_all.columns.get_level_values(1)
+
+        if fx_ticker not in data_all.columns:
+            # 환율 데이터가 없을 경우 최근 환율로 임시 대체하거나 1로 설정
+            data_all[fx_ticker] = 1350.0
+
+        fx_history = data_all[fx_ticker]
+        pure_stock_data = data_all.drop(columns=[fx_ticker])
+
+        # [최적화] 벡터화 환율 연산
+        non_kr_cols = [c for c in pure_stock_data.columns if not any(ex in c.upper() for ex in [".KS", ".KQ"])]
+        for col in non_kr_cols:
+            if col in pure_stock_data.columns:
+                pure_stock_data[col] = pure_stock_data[col] * fx_history
+
+        # 섹터 지수 계산
+        sector_df = pd.DataFrame(index=pure_stock_data.index)
+        for sector, info in sector_map.items():
+            valid = [t for t in info["tickers"] if t in pure_stock_data.columns]
+            if valid:
+                sector_df[sector] = pure_stock_data[valid].mean(axis=1)
+
+        # 선택한 시작일 이후 데이터만 필터링하여 반환
+        sector_df = sector_df[sector_df.index >= pd.to_datetime(start_dt)]
+
+        if sector_df.empty:
+            return pd.DataFrame(), pd.DataFrame()
+
+        # 첫 날을 100으로 맞춘 수익률 계산
+        growth_sector = (sector_df / sector_df.iloc[0]) * 100
+
+        return growth_sector, pure_stock_data
+
+
+    # =========================================================
+    # 📅 기간별 섹터 분석 (메인 로직)
+    # =========================================================
+    st.markdown(f"### 📅📈 기간별 섹터 분석")
+
+    # (A) 섹터 및 종목 매핑 정의 (변수가 먼저 정의되어야 에러가 안 납니다)
+    sector_map = {
+        "반도체": {"tickers": ["005930.KS", "000660.KS", "058470.KS", "042700.KS", "NVDA", "TSM", "INTC", "AMD", "AVGO",
+                            "ASML", "MU"],
+                "names": ["삼성전자", "SK하이닉스", "리노공업", "한미반도체", "엔비디아", "TSMC", "인텔", "AMD", "브로드컴", "ASML 홀딩 ADR",
+                          "마이크론 테크놀로지"]},
+        "자동차": {"tickers": ["005380.KS", "000270.KS", "TSLA", "F", "GM", "Lucid", "TM"],
+                "names": ["현대차", "기아", "테슬라", "포드 모터", "제너럴 모터스", "루시드 그룹", "토요타자동차 ADR"]},
+        "방산": {"tickers": ["012450.KS", "272210.KS", "003490.KS", "047810.KS", "LMT", "PLTR", "RTX", "NOC", "BA", "GD"],
+               "names": ["한화에어로스페이스", "한화시스템", "대한항공", "한국항공우주", "록히드마틴", "팔란티어", "RTX", "노스롭 그루만", "보잉", "제너럴 다이내믹스"]},
+        "소프트웨어/AI": {
+            "tickers": ["035420.KS", "035720.KS", "MSFT", "GOOGL", "GOOG", "META", "ORCL", "PLTR", "CRM", "ADBE"],
+            "names": ["NAVER", "카카오", "마이크로소프트", "구글(알파벳 Class A)", "구글(알파벳 Class C)", "메타", "오라클", "팔란티어", "세일즈포스",
+                      "어도비"]},
+        "우주항공": {
+            "tickers": ["047810.KS", "012450.KS", "003490.KS", "079550.KS", "099320.KS", "211270.KS", "RKLB", "ASTS",
+                        "LMT", "BA"],
+            "names": ["한국항공우주", "한화에어로스페이스", "대한항공", "LIG넥스원", "쎄트렉아이", "AP위성", "로켓랩", "AST 스페이스모바일", "록히드마틴", "보잉"]},
+        "해운/유통": {
+            "tickers": ["042660.KS", "011200.KS", "005880.KS", "000120.KS", "FDX", "UPS", "AMZN", "WMT", "CPNG", "GD"],
+            "names": ["한화오션", "HMM", "대한해운", "CJ대한통운", "페덱스", "UPS", "아마존닷컴", "월마트", "쿠팡", "제너럴 다이내믹스"]},
+        "에너지": {"tickers": ["015760.KS", "009830.KS", "298040.KS", "034020.KS", "010120.KS", "229640.KS", "267260.KS",
+                            "XOM", "NEE", "ENPH", "CVX"],
+                "names": ["한국전력", "한화솔루션", "효성중공업", "두산에너빌리티", "LS ELECTRIC", "LS에코에너지", "HD현대일렉트릭", "엑슨 모빌",
+                          "넥스트에라 에너지", "인페이즈 에너지", "셰브론"]},
+        "건설": {"tickers": ["000720.KS", "028050.KS", "028260.KS", "006360.KS", "047040.KS", "CAT", "VMC", "PWR", "ACM"],
+               "names": ["현대건설", "DL이앤씨", "삼성물산", "GS건설", "대우건설", "캐터필러", "벌칸 머티리얼스", "콴타 서비스", "애이콤"]},
+        "휴머노이드 로봇": {
+            "tickers": ["277810.KS", "454910.KS", "388720.KS", "108490.KS", "011210.KS", "NVDA", "TSLA", "ISRG", "ROK"],
+            "names": ["레인보우로보틱스", "두산로보틱스", "유일로보틱스", "로보티즈", "현대위아", "엔비디아", "테슬라", "인튜이티브 서지컬", "로크웰 오토메이션"]},
+        "식료품/음식료": {
+            "tickers": ["004370.KS", "271560.KS", "003230.KS", "097950.KS", "280360.KS", "KO", "PEP", "MDLZ", "COST",
+                        "MKC"],
+            "names": ["농심", "오리온", "삼양식품", "CJ제일제당", "롯데웰푸드", "코카콜라", "펩시코", "몬덜리즈 인터내셔널", "코스트코 홀세일",
+                      "맥코믹 앤 컴퍼니 무의결권주"]},
+        "의약/바이오": {
+            "tickers": ["207940.KS", "068270.KS", "000100.KS", "326030.KS", "196170.KS", "LLY", "NVO", "JNJ", "PFE",
+                        "AMGN"],
+            "names": ["삼성바이오로직스", "셀트리온", "유한양행", "SK바이오팜", "알테오젠", "일라이 릴리", "노보 노디스크 ADR", "존슨앤드존슨", "화이자", "암젠"]},
+        "여행/레저/소비": {
+            "tickers": ["008770.KS", "039130.KS", "034230.KS", "035250.KS", "ABNB", "BKNG", "DIS", "MAR", "H", "CCL"],
+            "names": ["호텔신라", "하나투어", "파라다이스", "강원랜드", "에어비앤비", "부킹 홀딩스", "월트디즈니", "메리어트 인터내셔널", "하얏트 호텔", "카니발"]},
+    }
+
+    st.sidebar.markdown("## 📅 데이터 조회 설정")
+
+    # 1. 연/월/일 드롭다운 (사이드바 배치)
+    available_dates = data.index.unique()
+
+    with st.sidebar:
+        # 연도 선택
+        years = sorted(available_dates.year.unique(), reverse=True)
+        sel_y = st.selectbox("Year", options=years, index=0, key="sb_year")
+
+        # 월 선택 (선택된 연도에 해당하는 월만 추출)
+        months = sorted(available_dates[available_dates.year == sel_y].month.unique())
+        default_m_idx = len(months) - 1
+        sel_m = st.selectbox("Month", options=months, index=default_m_idx, key="sb_month")
+
+        # 일 선택 (선택된 연도/월에 해당하는 일만 추출)
+        days = sorted(available_dates[(available_dates.year == sel_y) & (available_dates.month == sel_m)].day.unique())
+        default_d_idx = len(days) - 1
+        sel_d = st.selectbox("Day", options=days, index=default_d_idx, key="sb_day")
+
+        try:
+            # 뉴스 데이터 가져오기
+            recent_news = get_global_news_ai(limit=8)
+
+            if recent_news:
+                with st.spinner("Gemini가 시황 분석 중..."):
+                    analysis_result = get_ai_macro_analysis(recent_news)
+                    st.markdown(analysis_result)
+
+        except Exception as e:
+            st.error(f"실행 오류: {e}")
+
+
+    # 2. 날짜 매칭 로직 (기존 로직 유지)
+    target_date = available_dates[(available_dates.year == sel_y) &
+                                  (available_dates.month == sel_m) &
+                                  (available_dates.day == sel_d)][-1]
+
+    # 실제 데이터상의 유효 날짜 인덱스 확보
+    idx_list = data.index.get_indexer([target_date], method='pad')[0]
+    date_idx = int(idx_list)  # 숫자로 확실하게 변환
+
+    # 2. 이제 get_loc이 정상적으로 작동합니다.
+    actual_valid_date = data.index[date_idx]
+
+    # 3. 메인 화면 상단에 현재 조회 중인 날짜 표시 (선택 사항)
+    st.markdown(f"### 📊 분석 기준일: `{actual_valid_date.strftime('%Y-%m-%d')}`")
+
+
+    # (B) 기간 설정 UI
+    period = st.selectbox("기간설정", ["7일", "1개월", "6개월", "1년"], key="sector_period_selector")
+
+    # 2. 기준일(actual_valid_date)로부터 시작일 계산
+    if period == "7일":
+        start_date = actual_valid_date - pd.DateOffset(days=7)
+    elif period == "1개월":
+        start_date = actual_valid_date - pd.DateOffset(months=1)
+    elif period == "6개월":
+        start_date = actual_valid_date - pd.DateOffset(months=6)
+    elif period == "1년":
+        start_date = actual_valid_date - pd.DateOffset(years=1)
+    else:
+        start_date = actual_valid_date - pd.DateOffset(days=7)
+
+    # 3. yfinance용 period 문자열 매핑 (데이터를 넉넉히 받아오기 위함)
+    # 시작일보다 조금 더 여유 있게 데이터를 받아와야 이동평균선 등을 계산할 때 에러가 안 납니다.
+    period_days_map = {"7일": "1mo", "1개월": "3mo", "6개월": "1y", "1년": "2y"}
+    yf_period = period_days_map[period]
+
+    # 4. 데이터 호출 (sector_map은 상단에 정의된 전역 변수 사용)
+    # [핵심 수정] get_processed_sector_data 함수에 날짜 범위를 직접 전달
+    with st.spinner('데이터를 불러오는 중...'):
+        growth_sector, data_sector_krw = get_processed_sector_data(sector_map, start_date, actual_valid_date)
+
+    # 5. [중요] 호출된 데이터에서 사용자가 선택한 기간만큼만 슬라이싱
+    # 이렇게 해야 차트가 선택한 날짜까지만 깔끔하게 나옵니다.
+    try:
+        if growth_sector is not None and not growth_sector.empty:
+            # 시작일만 제한합니다.
+            growth_sector = growth_sector.loc[growth_sector.index >= pd.to_datetime(start_date)]
+
+            # [수정] 종료일이 오늘이면 슬라이싱 끝을 제한하지 않음 (실시간 데이터 보존)
+            today_date = pd.Timestamp.now().normalize()
+            if pd.to_datetime(actual_valid_date).normalize() < today_date:
+                # 과거 날짜를 선택했을 때만 끝을 자름
+                growth_sector = growth_sector.loc[
+                    growth_sector.index <= pd.to_datetime(actual_valid_date).replace(hour=23, minute=59)]
+
+        if data_sector_krw is not None:
+            data_sector_krw = data_sector_krw.loc[data_sector_krw.index >= pd.to_datetime(start_date)]
+
+            # [수정] 종료일이 오늘이면 끝을 제한하지 않음
+            if pd.to_datetime(actual_valid_date).normalize() < today_date:
+                data_sector_krw = data_sector_krw.loc[
+                    data_sector_krw.index <= pd.to_datetime(actual_valid_date).replace(hour=23, minute=59)]
+
+    except Exception as e:
+        st.warning(f"데이터 슬라이싱 중 알림: {e}")
+
+    # (D) 차트 출력
+    if not growth_sector.empty:
+        colors = ["#636EFA", "#EF553B", "#00CC96", "#AB63FA", "#FFA15A", "#19D3F3", "#FF6692", "#B6E880"]
+        sectors_list = list(growth_sector.columns)
+
+        st.markdown("---")
+        for i in range(0, len(sectors_list), 2):
+            row_cols = st.columns(2)
+            for j in range(2):
+                if i + j < len(sectors_list):
+                    sector_name = sectors_list[i + j]
+                    sector_color = colors[(i + j) % len(colors)]
+
+                    # 1. 해당 섹터 데이터 추출 및 결측치 제거
+                    raw_series = growth_sector[sector_name].dropna()
+
+                    # 데이터가 2개 이상 있어야 '변화'를 그릴 수 있습니다.
+                    if len(raw_series) > 1:
+                        base_val = float(raw_series.values[0])  # 첫 값을 확실하게 실수(float)로 변환
+
+                        # 기준값이 0이면 나누기가 안 되므로 아주 작은 값으로 대체하거나 스킵
+                        if base_val == 0:
+                            base_val = 1e-9
+
+                            # 누적 수익률 계산
+                        cumulative_returns = (raw_series / base_val - 1) * 100
+
+                        with row_cols[j]:
+                            fig = go.Figure()
+                            fig.add_trace(go.Scatter(
+                                x=cumulative_returns.index,
+                                y=cumulative_returns.values,
+                                mode="lines+markers",  # 데이터 포인트가 적을 땐 마커를 쓰는 게 확실합니다
+                                line=dict(width=3, color=sector_color),
+                                fill='tozeroy',
+                                fillcolor=f"rgba({int(sector_color[1:3], 16)}, {int(sector_color[3:5], 16)}, {int(sector_color[5:7], 16)}, 0.1)",
+                                hovertemplate="<b>%{x|%y.%m.%d}</b><br>수익률: %{y:.2f}%<extra></extra>"
+                            ))
+
+                            # Y축 범위를 데이터에 맞춰 자동 조절 (일직선 방지)
+                            y_min = cumulative_returns.min()
+                            y_max = cumulative_returns.max()
+                            # 위아래로 약간의 여백(0.5%)을 강제로 줍니다.
+                            y_range = [y_min - 0.5, y_max + 0.5]
+
+                            fig.update_layout(
+                                title=f"📈 {sector_name} 누적 수익률 (%)",
+                                height=300,
+                                margin=dict(l=40, r=20, t=50, b=40),
+                                xaxis=dict(tickformat="%y.%m.%d", showgrid=True),
+                                yaxis=dict(
+                                    range=y_range,  # 강제 범위 설정으로 미세한 변화도 보이게 함
+                                    showgrid=True,
+                                    zeroline=True,
+                                    zerolinewidth=2,
+                                    zerolinecolor='rgba(0,0,0,0.3)',
+                                    ticksuffix="%"
+                                ),
+                                plot_bgcolor="rgba(0,0,0,0)",
+                                showlegend=False
+                            )
+                            st.plotly_chart(fig, use_container_width=True, key=f"chart_cum_fix_{sector_name}")
+
+                            with st.expander(f"🔍 {sector_name} 구성종목 확인"):
+                                if sector_name in sector_map:
+                                    names = sector_map[sector_name]["names"]
+                                    codes = sector_map[sector_name]["tickers"]
+
+                                    st.write("💡 세부내용은 종목명을 클릭하세요.")
+
+                                    # 버튼을 한 줄에 여러 개 배치하거나 리스트로 배치
+                                    for name, code in zip(names, codes):
+                                        # 클릭 시 팝업 함수 실행
+                                        if st.button(f"{name} ({code})", key=f"popup_{sector_name}_{code}"):
+                                            show_stock_detail(code, name, data_sector_krw)
+                                else:
+                                    st.write("구성종목 정보가 없습니다.")
+                    else:
+                        with row_cols[j]:
+                            st.warning(f"{sector_name}: 분석할 데이터가 부족합니다.")
+
+                        with st.expander(f"🔍 {sector_name} 구성종목 확인"):
+                            names = sector_map[sector_name]["names"]
+                            codes = sector_map[sector_name]["tickers"]
+                            for name, code in zip(names, codes):
+                                st.write(f"- {name} ({code})")
+                        st.markdown("<br>", unsafe_allow_html=True)
+
+
+    # =========================
+    # 🛠 0. 뉴스 가져오기 함수 (링크 포함)
+    # =========================
+    @st.cache_data(ttl=3600)
+    def get_news(keyword, limit=2):
+        rss_url = f"https://news.google.com/rss/search?q={keyword}&hl=ko&gl=KR&ceid=KR:ko"
+        feed = feedparser.parse(rss_url)
+        news_results = []
+        for entry in feed.entries[:limit]:
+            news_results.append({
+                "title": entry.title,
+                "link": entry.link
+            })
+        return news_results
+
+
+    # =========================
+    # 📅 날짜 선택 및 상호 동기화 로직
+    # =========================
+
+
+    # 날짜가 바뀌었을 때 섹터 상세창을 초기화하고 싶다면 아래 주석을 해제하세요.
+    # if "last_date" not in st.session_state or st.session_state.last_date != actual_valid_date:
+    #     st.session_state.clicked_sector = None
+    #     st.session_state.last_date = actual_valid_date
+
+    # 환율 호출
+    current_fx = float(data.loc[actual_valid_date, "USDKRW"])
+
+    # 영업일 및 업데이트 안내 설정
+    is_weekend = actual_valid_date.weekday() >= 5
+    update_time_info = "다음 영업일 한국시간 오전 08:00"
+
+    if is_weekend:
+        st.warning(f"📢 **{actual_valid_date.strftime('%Y-%m-%d')}**는 시장 휴장일입니다. 직전 영업일 데이터를 참조합니다.")
+    else:
+        st.info(f"📍 분석 시점: **{actual_valid_date.strftime('%Y-%m-%d')}** (환율: {current_fx:,.2f}원)")
+
+    # =========================
+    # 📊 지수별 정리표
+    # =========================
+    import streamlit as st
+
+    # 1. 모바일 3열 유지를 위한 CSS 주입 (기본 레이아웃 유지하며 스타일만 추가)
+    st.markdown("""
+        <style>
+        /* 모든 환경에서 st.columns가 세로로 겹치지 않게 설정 */
+        [data-testid="column"] {
+            width: calc(33.3333% - 1rem) !important;
+            flex: 1 1 calc(33.3333% - 1rem) !important;
+            min-width: calc(33.3333% - 1rem) !important;
+        }
+
+        /* 모바일 가독성을 위한 미세 조정 (화면 너비 640px 이하) */
+        @media (max-width: 640px) {
+            /* 지수 이름 (Caption) 크기 조절 */
+            .stCaption {
+                font-size: 0.7rem !important;
+                white-space: nowrap !important;
+                overflow: hidden !important;
+                text-overflow: ellipsis !important;
+            }
+            /* 메인 수치 (Subheader) 크기 조절 */
+            .stSubheader {
+                font-size: 0.9rem !important;
+            }
+            /* 서브 수치 (USD 마크다운) 크기 조절 */
+            [data-testid="stMarkdownContainer"] p {
+                font-size: 0.65rem !important;
+            }
+            /* st.metric 값과 델타 크기 조절 */
+            [data-testid="stMetricValue"] {
+                font-size: 0.8rem !important;
+            }
+            [data-testid="stMetricDelta"] {
+                font-size: 0.7rem !important;
+            }
+            /* 컨테이너 내부 여백 줄임 */
+            div[data-testid="stContainer"] {
+                padding: 0.5rem !important;
+            }
+        }
+        </style>
+        """, unsafe_allow_html=True)
+
+    st.markdown("### 📈 시장 지수 실시간 대시보드")
+
+    if date_idx > 0:
+        # 1. 데이터 추출 및 환산 로직 (기존 유지)
+        curr_usd = chart_data.iloc[date_idx].copy()
+        prev_usd = chart_data.iloc[date_idx - 1].copy()
+        curr_krw = curr_usd.copy()
+        prev_krw = prev_usd.copy()
+
+        for col in usd_assets:
+            if col in curr_krw:  # 데이터 존재 여부 확인 추가 (안정성)
+                curr_krw[col] = curr_usd[col] * current_fx
+                prev_krw[col] = prev_usd[col] * current_fx
+
+        for col in ["KOSPI", "KOSDAQ"]:
+            if col in curr_krw:
+                curr_usd[col] = curr_krw[col] / current_fx
+                prev_usd[col] = prev_krw[col] / current_fx
+
+        # 2. 증감 계산 (기존 유지)
+        diff_amt = curr_krw - prev_krw
+        diff_pct = (diff_amt / prev_krw) * 100
+
+        # 3. 카드 레이아웃 설정 (3열 구성)
+        display_order = [
+            ("🇺🇸 Dow Jones", "Dow Jones"), ("🇺🇸 NASDAQ", "NASDAQ"), ("🇺🇸 S&P500", "S&P500"),
+            ("🥇 Gold", "Gold"), ("₿ Bitcoin", "Bitcoin"), ("🛢️ WTI Oil", "WTI"),
+            ("🔥 Natural Gas", "Natural Gas"), ("🇰🇷 KOSPI", "KOSPI"), ("🇰🇷 KOSDAQ", "KOSDAQ")
+        ]
+
+        rows = [display_order[i:i + 3] for i in range(0, len(display_order), 3)]
+
+        for row in rows:
+            cols = st.columns(3)
+            for i, (label, key) in enumerate(row):
+                with cols[i]:
+                    with st.container(border=True):
+                        # 지수 이름
+                        st.caption(label)
+
+                        # 메인 수치 (KRW)
+                        val_krw = curr_krw[key]
+                        st.subheader(f"{val_krw:,.0f} ₩")
+
+                        # 서브 수치 (USD)
+                        val_usd = curr_usd[key]
+                        st.markdown(
+                            f"<p style='color: gray; font-size: 0.85rem; margin-top: -15px;'>($ {val_usd:,.2f})</p>",
+                            unsafe_allow_html=True)
+
+                        # 변동폭 (st.metric 활용)
+                        pct_change = diff_pct[key]
+                        st.metric(label="전일대비", value=f"{diff_amt[key]:+,.0f} ₩", delta=f"{pct_change:+.2f}%")
+
+
+        # 4. 하단 환율 정보
+        st.divider()
+        prev_fx = float(data.loc[available_dates[date_idx - 1], "USDKRW"])
+        fx_diff = current_fx - prev_fx
+        fx_pct = (fx_diff / prev_fx) * 100
+
+        with st.expander("💱 실시간 환율 정보 (USDKRW)", expanded=True):
+            c1, c2, c3 = st.columns(3)
+            c1.metric("현재 환율", f"{current_fx:,.2f} ₩")
+            c2.metric("변동량", f"{fx_diff:+,.2f} ₩")
+            c3.metric("변동률", f"{fx_pct:+.2f}%")
+
+    else:
+        st.warning("첫 번째 데이터 날짜이므로 전일 대비 증감 분석이 불가능합니다.")
+
+# =========================
+# 🧠 3. AI 분석 엔진 (속도 최적화)
+# =========================
+    def analyze_trend_fast(ticker_name, df, target_idx):
+        # 분석에 필요한 최소한의 윈도우만 가져옴 (최대 120일)
+        start_pos = max(0, target_idx - 120)
+        window_data = df[ticker_name].iloc[start_pos: target_idx + 1]
+
+        if len(window_data) < 120:
+            return {"상태": "⚪ 데이터 부족", "점수": 50, "모멘텀(3M)": "0.00%"}
+
+        curr = window_data.iloc[-1]
+        m20, m60, m120 = window_data.iloc[-20:].mean(), window_data.iloc[-60:].mean(), window_data.mean()
+
+        if m20 > m60 > m120:
+            status, score = "🔥 강력 상승 (정배열)", 100
+        elif curr > m60:
+            status, score = "✅ 중기 상승 유지", 70
+        elif m20 < m60 < m120:
+            status, score = "💀 강력 하락 (역배열)", 10
+        else:
+            status, score = "⚖️ 변동성/혼조세", 50
+
+        mom = (curr / window_data.iloc[0] - 1) * 100
+        return {"상태": status, "점수": score, "모멘텀(3M)": f"{mom:+.2f}%"}
+
+
+    def color_status(val):
+        color_map = {"강력 상승": "#2ecc71", "강력 하락": "#e74c3c", "상승 유지": "#3498db"}
+        for key, color in color_map.items():
+            if key in val: return f'color: {color}; font-weight: bold'
+        return 'color: #f1c40f; font-weight: bold'
+
+
+    # =========================================================
+    # 🔗 상관관계
+    # =========================================================
+    def render_correlation_analysis(df):
+        st.markdown("### 🔗 자산 간 상관관계 분석 (최근 120일)")
+        st.caption("주요 지수, 원자재, 환율 등 거시 경제 지표 간의 동행성을 분석합니다.")
+
+        # 1. 최근 120일 데이터 기준 상관계수 계산
+        # 가격 지수 자체보다 변동성(pct_change) 기반 분석이 매크로 흐름 파악에 더 정확합니다.
+        corr = df.tail(120).pct_change().corr()
+
+        # 2. 레이아웃 분할 (히트맵 | AI 통계 분석)
+        col_left, col_right = st.columns([1.2, 0.8])
+
+        with col_left:
+            fig_corr = px.imshow(
+                corr,
+                text_auto=".2f",
+                aspect="auto",
+                color_continuous_scale="RdBu_r",
+                zmin=-1, zmax=1,
+                title="Asset Correlation Heatmap"
+            )
+            fig_corr.update_layout(height=500, margin=dict(t=50, b=10, l=10, r=10))
+            st.plotly_chart(fig_corr, use_container_width=True)
+
+        with col_right:
+            st.markdown("#### 🤖 자산 흐름 분석 리포트")
+
+            # 상관계수 행렬 가공 (중복 제거)
+            mask = np.triu(np.ones(corr.shape), k=1).astype(bool)
+            sol = corr.where(mask).unstack().dropna().sort_values()
+
+            # 상위/하위 관계 추출
+            decoupling_pairs = sol.head(2)  # 가장 반대로 움직이는 2개
+            coupling_pairs = sol.tail(2)  # 가장 같이 움직이는 2개
+
+            # --- [섹션 1: 커플링(동행)] ---
+            st.markdown("##### ✅ 강한 동행 (커플링)")
+            for (a1, a2), val in coupling_pairs.iloc[::-1].items():
+                st.success(f"**{a1} ↔ {a2}** (상관계수: {val:.2f})")
+            st.caption("두 자산은 현재 같은 방향으로 움직이는 경향이 매우 강합니다.")
+
+            st.write("")  # 간격 조절
+
+            # --- [섹션 2: 디커플링(반등)] ---
+            st.markdown("##### 🔄 강한 반동 (디커플링)")
+            for (a1, a2), val in decoupling_pairs.items():
+                # 음수일 경우 강조
+                box_style = "border-left: 5px solid #E74C3C; background-color: rgba(231, 76, 60, 0.1);" if val < 0 else "border-left: 5px solid #F1C40F;"
+                st.markdown(f"""
+                    <div style="{box_style} padding: 10px; border-radius: 5px; margin-bottom: 5px;">
+                        <small style="color:gray;">상관도: {val:.2f}</small><br>
+                        <b style="font-size:15px;">{a1} ↔ {a2}</b>
+                    </div>
+                """, unsafe_allow_html=True)
+
+            st.info("💡 상관관계가 낮은 자산들을 조합하면 포트폴리오의 전체 변동성을 낮출 수 있습니다.")
+
+
+    # 실행 호출부
+    render_correlation_analysis(data.drop(columns=["USDKRW"]))
+
+    # =========================================================
+    # 📈 [보강] 도미넌스 & 실시간 상세 리포트
+    # =========================================================
+    import plotly.express as px
+    import plotly.graph_objects as go
+
+    def render_v81_verification_mode():
+        # 1. 데이터 로드 (전역 변수에서 안전하게 가져오기)
+        df_sec = globals().get('growth_sector')  # 앞에서 계산한 수익률 지수 데이터
+        df_krw = globals().get('data_sector_krw')  # 종가(KRW 환산) 데이터
+        df_vol = globals().get('data_volume_indices')  # 거래량 데이터 (있을 경우)
+
+        # 시고저종 데이터 로드
+        df_open = globals().get('data_open_krw')
+        df_high = globals().get('data_high_krw')
+        df_low = globals().get('data_low_krw')
+
+        # sector_map이 전역에 정의되어 있어야 함
+        s_map = globals().get('sector_map')
+
+        if df_sec is None or df_krw is None or s_map is None:
+            st.warning("데이터 로딩 중이거나 sector_map이 정의되지 않았습니다.")
+            return
+
+        # 2. 날짜 및 세션 설정
+        all_idx = df_krw.index
+        # 전역에 설정된 날짜가 없으면 가장 최근 날짜 사용
+        sel_y = globals().get('sel_y', all_idx[-1].year)
+        sel_m = globals().get('sel_m', all_idx[-1].month)
+        sel_d = globals().get('sel_d', all_idx[-1].day)
+
+        try:
+            _idx = all_idx.get_indexer([pd.Timestamp(sel_y, sel_m, sel_d)], method='pad')[0]
+        except:
+            _idx = -1
+        actual_date = all_idx[_idx]
+
+        # 세션 상태 초기화 (클릭 이벤트 처리용)
+        if "v81_target" not in st.session_state:
+            st.session_state.v81_target = "반도체"
+
+        # 도미넌스 차트 클릭 시 타겟 변경
+        if "v81_map" in st.session_state:
+            event = st.session_state.v81_map
+            if event and "selection" in event and event["selection"]["points"]:
+                st.session_state.v81_target = event["selection"]["points"][0].get("label")
+
+        # 3. 데이터 가공 (도미넌스용 Treemap 데이터 생성)
+        _calc = []
+        for name, info in s_map.items():
+            if name not in df_sec.columns: continue
+
+            # 1. 비중(크기) 계산: df_vol 대신 df_krw(가격 데이터) 사용
+            valid_tickers = [t for t in info["tickers"] if t in df_krw.columns]
+            vol = 0.0
+
+            if valid_tickers:
+                # 해당 날짜(_idx)의 섹터 내 종목들 가격을 합산하여 크기로 사용
+                # 가격이 높거나 종목이 많을수록 네모가 커집니다.
+                vol = df_krw[valid_tickers].iloc[_idx].sum()
+
+            # 데이터가 없으면 최소 크기 유지
+            if vol <= 0 or pd.isna(vol):
+                vol = 1.0
+
+            # 2. 수익률 계산
+            c_p = df_sec[name].iloc[_idx]
+            p_p = df_sec[name].iloc[max(0, _idx - 1)]
+            ret = ((c_p / p_p) - 1) * 100 if p_p != 0 else 0
+
+            _calc.append({"섹터": name, "비중": vol, "수익률": ret})
+
+        df_h = pd.DataFrame(_calc)
+
+        # 레이아웃 설정
+        col_l, col_r = st.columns([1.1, 0.9])
+
+        # --- 왼쪽 칼럼 (도미넌스 & 게이지) ---
+        with col_l:
+            st.subheader(f"🗺️ 시장 도미넌스 ({actual_date.strftime('%m/%d')})")
+
+            # 수익률에 따른 색상 맵 (빨강: 하락, 초록: 상승)
+            user_gradient = [[0.0, "#E74C3C"], [0.5, "#F1C40F"], [1.0, "#2ECC71"]]
+
+            fig = px.treemap(df_h, path=["섹터"], values="비중", color="수익률",
+                             color_continuous_scale=user_gradient,
+                             range_color=[-3.0, 3.0])
+
+            fig.update_traces(texttemplate="<b>%{label}</b><br>%{color:+.2f}%")
+            fig.update_layout(margin=dict(t=0, l=0, r=0, b=0), coloraxis_showscale=False)
+
+            # on_select="rerun"을 통해 클릭 시 오른쪽 상세 정보 업데이트
+            st.plotly_chart(fig, use_container_width=True, on_select="rerun", key="v81_map")
+
+            # Fear & Greed Gauge (섹터 평균 수익률 기반)
+            # Fear & Greed Gauge 수정본
+            avg_ret = df_h['수익률'].mean()
+            score = max(-3, min(3, avg_ret * 1.5))
+
+            gauge = go.Figure(go.Indicator(
+                mode="gauge+number", value=score,
+                title={'text': "Market Sentiment", 'font': {'size': 18}},
+                gauge={
+                    'axis': {'range': [-3, 3]},  # 전체 범위: -3부터 3까지
+                    'bar': {'color': "black"},
+                    'steps': [
+                        {'range': [-3, -1], 'color': "#E74C3C"},  # 공포: -3에서 -1까지
+                        {'range': [-1, 1], 'color': "#F1C40F"},  # 중립: -1에서 1까지
+                        {'range':[1, 3], 'color': "#2ECC71"}  # 탐욕: 1에서 3까지
+            ]
+            }
+            ))
+            gauge.update_layout(height=260, margin=dict(t=50, b=0, l=30, r=30))
+            st.plotly_chart(gauge, use_container_width=True)
+
+        # --- 오른쪽 칼럼 (상세 종목 & 데이터 검증) ---
+        with col_r:
+            active = st.session_state.v81_target
+            st.subheader(f"🔍 {active} 상세 종목")
+
+            _details = []
+            if active in s_map:
+                for t, n in zip(s_map[active]["tickers"], s_map[active]["names"]):
+                    if t not in df_krw.columns: continue
+
+                    # 해당 종목의 종가 데이터
+                    s_data = df_krw[t].dropna()
+                    if not s_data.empty:
+                        # 선택한 날짜의 위치 찾기
+                        try:
+                            k_pos = s_data.index.get_indexer([actual_date], method='pad')[0]
+                            c_p = s_data.iloc[k_pos]  # 당일 종가
+                            p_p = s_data.iloc[max(0, k_pos - 1)]  # 전일 종가
+
+                            change_rate = ((c_p / p_p) - 1) * 100 if p_p != 0 else 0
+
+                            _details.append({
+                                "종목명": n,
+                                "현재가": c_p,
+                                "수익률(%)": change_rate,
+                                "티커": t
+                            })
+                        except:
+                            continue
+
+            # 메인 종목 테이블 출력
+            if _details:
+                df_details = pd.DataFrame(_details)
+                st.dataframe(
+                    df_details.style.format({"현재가": "{:,.0f}원", "수익률(%)": "{:+.2f}%"})
+                    .map(lambda v: f'color: {"#2ECC71" if v > 0 else "#E74C3C" if v < 0 else "black"}',
+                         subset=["수익률(%)"]),
+                    use_container_width=True,
+                    hide_index=True,
+                    height=450
+                )
+            else:
+                st.info("선택된 섹터의 종목 데이터를 찾을 수 없습니다.")
+
+    # 함수 실행
+    render_v81_verification_mode()
+
+
+    # =========================================================
+    # 🔗 [독립 실행] 섹터 간 상관관계 및 역상관 분석
+    # =========================================================
+    def render_sector_specific_correlation():
+        # 1. 전역 변수에서 섹터 데이터(growth_sector) 가져오기
+        df_sec = globals().get('growth_sector')
+
+        if df_sec is None or df_sec.empty:
+            st.warning("상관관계 분석을 위한 'growth_sector' 데이터가 로드되지 않았습니다.")
+            return
+
+        st.markdown("---")
+        st.markdown("### 🔗 섹터 간 상관관계 분석 (최근 120일)")
+        st.caption("섹터별 수익률 움직임의 유사성을 분석합니다. -1에 가까울수록 반대로 움직입니다.")
+
+        # 2. 최근 120일 데이터 기준 상관계수 계산
+        # 가격 지수보다 변동성(pct_change) 기준 분석이 더 정확합니다.
+        corr = df_sec.tail(120).pct_change().corr()
+
+        # 3. 레이아웃 분할 (히트맵 | 역상관 리스트)
+        col_a, col_b = st.columns([1.2, 0.8])
+
+        with col_a:
+            fig_corr = px.imshow(
+                corr,
+                text_auto=".2f",
+                aspect="auto",
+                color_continuous_scale="RdBu_r",
+                zmin=-1, zmax=1,
+                title="Sector Correlation Heatmap"
+            )
+            fig_corr.update_layout(height=500, margin=dict(t=50, b=10, l=10, r=10))
+            st.plotly_chart(fig_corr, use_container_width=True)
+
+        with col_b:
+            st.markdown("#### 🔄 서로 반대로 움직이는 섹터")
+
+            # 상관계수 행렬에서 중복 제거 및 자기 자신(1.0) 제외
+            mask = np.triu(np.ones(corr.shape), k=1).astype(bool)
+            sol = corr.where(mask)
+            # 상관계수가 낮은 순(역상관)으로 정렬
+            sorted_corr = sol.unstack().dropna().sort_values()
+
+            # 하위 3개 커플 추출
+            low_corr_pairs = sorted_corr.head(3)
+
+            if not low_corr_pairs.empty:
+                for (s1, s2), val in low_corr_pairs.items():
+                    # 역상관 정도에 따른 색상 강조
+                    box_color = "#E74C3C" if val < 0 else "#F1C40F"
+                    st.markdown(f"""
+                        <div style="background-color:rgba(231, 76, 60, 0.1); border-left: 5px solid {box_color}; padding: 10px; border-radius: 5px; margin-bottom: 10px;">
+                            <small style="color:gray;">상관도: {val:.2f}</small><br>
+                            <b style="font-size:16px;">{s1} ↔ {s2}</b>
+                        </div>
+                    """, unsafe_allow_html=True)
+
+                st.info("💡 위 섹터들은 한쪽이 오를 때 다른 쪽은 내리는 경향이 있어 리스크 분산에 유리합니다.")
+            else:
+                st.write("현재 뚜렷한 역상관 관계가 포착되지 않았습니다.")
+
+
+    # ---------------------------------------------------------
+    # 호출부: 기존 함수들 밖에서 실행하세요
+    # ---------------------------------------------------------
+    render_sector_specific_correlation()
+
+
+    # =========================
+    # 📈 4. AI 분석 리포트 & 기상도
+    # =========================
+    st.markdown("---")
+    st.markdown(f"## 🤖 AI Multi-Asset Trend Report")
+
+    # [수정] date_idx가 정의되어 있어야 합니다. (앞선 날짜 선택 로직에서 정의됨)
+    analysis_targets = ["Dow Jones", "NASDAQ","S&P500", "Bitcoin", "Gold","KOSPI", "KOSDAQ", "WTI", "Natural Gas"]
+    trend_results = []
+    for t in analysis_targets:
+        if t in data.columns:
+            trend_results.append({"항목": t, **analyze_trend_fast(t, data, date_idx)})
+
+    if 'sector_df' in locals():
+        # 1. 인덱스가 날짜 형식이 아닐 경우를 대비해 강제로 변환합니다.
+        if not isinstance(sector_df.index, pd.DatetimeIndex):
+            sector_df.index = pd.to_datetime(sector_df.index)
+
+        # 2. 비교 대상인 actual_valid_date도 동일한 날짜 형식으로 맞춥니다.
+        target_date = pd.to_datetime(actual_valid_date)
+
+        # 3. 형식을 맞춘 후 인덱스를 찾습니다.
+        s_idx = sector_df.index.get_indexer([target_date], method='nearest')[0]
+
+
+        for s_name in sector_df.columns:
+            res = analyze_trend_fast(s_name, sector_df, s_idx)
+            res["항목"] = f"Sector: {s_name}"
+            trend_results.append(res)
+
+    report_df = pd.DataFrame(trend_results)
+    col_l, col_r = st.columns([1.5, 1])
+
+    with col_l:
+        st.dataframe(report_df.style.map(color_status, subset=["상태"]).background_gradient(cmap="RdYlGn", subset=["점수"]),
+                     use_container_width=True, hide_index=True)
+
+    with col_r:
+        if not report_df.empty:
+            avg_s = report_df["점수"].mean()
+            if avg_s > 75:
+                st.success("#### AI 시장 진단\n시장이 매우 낙관적인 **강세장**입니다.")
+            elif avg_s < 35:
+                st.error("#### AI 시장 진단\n리스크 관리가 필요한 **약세장**입니다.")
+            else:
+                st.info("#### AI 시장 진단\n방향성을 탐색 중인 **박스권/혼조세**입니다.")
+
+
+# =========================================================
+# 💡 [중요] 에러 해결: 대시보드에서 사용할 데이터를 먼저 정의합니다.
+# =========================================================
+# 1. 현재 선택된 날짜의 인덱스 확인 (앞선 코드에서 정의된 date_idx 사용)
+# 2. 성장률(growth) 데이터에서 해당 날짜의 행만 추출하여 row_growth 생성
+if 'growth' in locals() and 'date_idx' in locals():
+    row_growth = growth.iloc[date_idx]
+else:
+    # 혹시라도 변수가 없을 경우를 대비한 방어 코드
+    st.error("데이터(growth) 또는 날짜 인덱스가 설정되지 않았습니다.")
+    st.stop()
+
+# =========================
+# 📈 4. AI Market Insight Dashboard (보완된 요약 대시보드)
+# =========================
+st.markdown("### 📈 AI Market Insight Dashboard")
+summary_col1, summary_col2, summary_col3, summary_col4 = st.columns(4)
+
+with summary_col1:
+    # report_df가 정의되어 있는지 확인 후 점수 계산
+    if 'report_df' in locals() and not report_df.empty:
+        avg_score = report_df["점수"].mean()
+        sentiment = "매우 낙관" if avg_score > 80 else "낙관" if avg_score > 60 else "중립" if avg_score > 40 else "공포"
+        st.metric("Market Sentiment", f"{sentiment}", delta=f"{avg_score:.1f} pts")
+    else:
+        st.metric("Market Sentiment", "분석중...", delta="0 pts")
+
+with summary_col2:
+    # 실시간 변동성 계산
+    current_day_rets = data.pct_change().iloc[date_idx].fillna(0)
+    m_vol = current_day_rets.std() * 100
+    st.metric("Market Volatility", f"{'⚠️ 높음' if m_vol > 2 else '✅ 안정'}", delta=f"{m_vol:.2f}%")
+
+with summary_col3:
+    # row_growth 기반 최고 자산 (에러 지점 해결)
+    best_asset = row_growth.idxmax()
+    st.metric("Best Asset", best_asset, delta=f"{row_growth[best_asset]:.2f}%")
+
+with summary_col4:
+    # row_growth 기반 최저 자산 (에러 지점 해결)
+    worst_asset = row_growth.idxmin()
+    st.metric("Worst Asset", worst_asset, delta=f"{row_growth[worst_asset]:.2f}%", delta_color="inverse")
+
+
+# =========================
+# 📰 5. 뉴스 분석 (링크 포함)
+# =========================
+st.markdown("## 📰 AI 뉴스 분석")
+st.markdown("### 📍 국내 뉴스")
+keywords = ["금리", "국채", "환율", "유가", "부동산", "코스피"]
+
+# get_news 함수와 feedparser가 정의되어 있어야 합니다.
+news_cols = st.columns(3)
+for i, keyword in enumerate(keywords):
+    with news_cols[i % 3]:
+        st.markdown(f"**📌 {keyword}**")
+        try:
+            news_list = get_news(keyword, 2)
+            if news_list:
+                for news in news_list:
+                    # news가 딕셔너리 형태 {'title':..., 'link':...}인지 확인
+                    if isinstance(news, dict):
+                        st.markdown(f"- [{news['title']}]({news['link']})")
+                    else:
+                        st.markdown(f"- {news}")
+            else:
+                st.caption("관련 뉴스가 없습니다.")
+        except Exception as e:
+            st.caption(f"뉴스 로드 실패")
+        st.markdown("---")
+
+# =========================
+# 🛠 뉴스 데이터 정제 및 번역 함수
+# =========================
+from urllib.parse import quote
+
+
+def clean_text(text):
+    if not text: return ""
+    text = html.unescape(text)
+    text = re.sub(r'<[^>]+>', '', text)
+    text = text.replace('\n', ' ').strip()
+    return text
+
+
+# --- ✅ 추가: 번역 전용 독립 캐시 함수 ---
+@st.cache_data(ttl=86400)  # 24시간 동안 번역 결과 기억
+def get_cached_translation(text, langpair="en|ko"):
+    if not text: return ""
+    try:
+        # MyMemory API 호출
+        t_url = f"https://api.mymemory.translated.net/get?q={quote(text[:250])}&langpair={langpair}"
+        t_res = requests.get(t_url, timeout=5).json()
+        translated = t_res.get('responseData', {}).get('translatedText', text)
+
+        # API 경고 메시지 처리
+        if "MYMEMORY WARNING" in translated or not translated:
+            return None  # None을 반환하여 호출부에서 원문을 쓰도록 유도
+
+        return clean_text(translated)
+    except Exception:
+        return None
+
+
+# --- ✅ 수정된 뉴스 로드 함수 ---
+@st.cache_data(ttl=3600)
+def get_global_news_ai(keyword_en, limit=2):
+    encoded_keyword = quote(keyword_en)
+    rss_url = f"https://news.google.com/rss/search?q={encoded_keyword}&hl=en-US&gl=US&ceid=US:en"
+    feed = feedparser.parse(rss_url)
+
+    if not feed.entries:
+        return []
+
+    summarized_news = []
+    for entry in feed.entries[:limit]:
+        original_title = clean_text(entry.title)
+        raw_desc = clean_text(entry.summary) if 'summary' in entry else original_title
+        raw_desc = raw_desc[:250]
+
+        # 1. 제목 번역 (캐시 함수 이용)
+        translated_title = get_cached_translation(original_title)
+        if not translated_title:  # 번역 실패나 제한 시 원문 유지
+            translated_title = original_title
+
+        # 2. 요약본 번역 (캐시 함수 이용)
+        translated_summary = get_cached_translation(raw_desc)
+        if not translated_summary:
+            translated_summary = "원문을 참고해 주세요. (실시간 번역량 초과 혹은 오류)"
+
+        summarized_news.append({
+            "title": translated_title,
+            "original_title": original_title,
+            "link": entry.link,
+            "summary": translated_summary
+        })
+
+    return summarized_news
+
+
+# =========================
+# 🌍 UI 레이아웃
+# =========================
+st.markdown("---")
+st.markdown("### 🌐 글로벌 뉴스")
+
+global_keywords = {
+    "미국 금리": "Treasuries",
+    "미국": "Donald Trump Election US WAR",
+    "지정학적 리스크": "Oil Middle East Tension",
+    "가상자산": "Bitcoin Crypto Regulation",
+    "중국": "China US relations invasion of Taiwan",
+    "한국": "Korea Debt to GDP",
+    "증시": "Stock Market Equity",
+    "원유": "Oil shock",
+}
+
+global_cols = st.columns(2)
+for i, (kr_name, en_keyword) in enumerate(global_keywords.items()):
+    with global_cols[i % 2]:
+        st.markdown(f" 📌 {kr_name}")
+        news_data = get_global_news_ai(en_keyword, 2)
+
+        if not news_data:
+            st.caption("⚠️ 해당 키워드로 검색된 글로벌 뉴스가 없습니다.")
+        else:
+            for news in news_data:
+                # 제목이 너무 길면 자르되 클릭 가능하게 처리
+                with st.expander(f"📑 {news['title']}"):
+                    st.caption(f"Original: {news['original_title']}")
+                    st.info(f"**AI 번역 요약:** {news['summary']}")
+                    st.markdown(f"🔗 [기사 원문 읽기]({news['link']})")
+        st.markdown("---")
+
+
+
+# =========================
+#  하락패턴
+# =========================
+
+def draw_danger_chart(pattern_type):
+    # 1. 패턴별 맞춤 가격 데이터 (30개씩)
+    if pattern_type == "Head & Shoulders":
+        prices = [100, 105, 110, 105, 115, 125, 115, 105, 110, 103, 95, 90, 88, 85, 83, 82, 81, 80, 79, 78, 77, 76, 75, 74, 73, 72, 71, 70, 69, 68]
+    elif pattern_type == "Dead Cross":
+        prices = [120, 118, 115, 112, 110, 108, 105, 103, 100, 98, 95, 92, 88, 85, 82, 80, 78, 75, 72, 70, 68, 65, 63, 60, 58, 55, 53, 50, 48, 45]
+    elif pattern_type == "Double Top":
+        prices = [90, 110, 125, 110, 95, 110, 125, 110, 90, 85, 80, 78, 75, 73, 70, 68, 65, 63, 61, 60, 58, 55, 53, 50, 48, 46, 44, 42, 40, 38]
+    elif pattern_type == "Bear Flag":
+        prices = [90, 110, 125, 110, 95, 110, 125, 110, 90, 85, 80, 78, 75, 73, 70, 68, 65, 63, 61, 60, 58, 55, 53, 50, 48, 46, 44, 42, 40, 38]
+    elif pattern_type == "Descending Triangle":
+        prices = [120, 100, 110, 100, 105, 100, 102, 100, 95, 85, 75, 70, 68, 65, 63, 60, 58, 55, 53, 50, 48, 45, 43, 40, 38, 35, 33, 30, 28, 25]
+    elif pattern_type == "Dead Cat Bounce":
+        prices = [130, 100, 70, 50, 40, 55, 65, 55, 45, 35, 30, 28, 26, 24, 22, 20, 18, 16, 14, 12, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1]
+    else:
+        prices = [100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100]*30
+
+    x_range = list(range(len(prices)))
+    df = pd.DataFrame({'Close': prices})
+
+    # 2. 보조지표 계산 (데이터 부족으로 끊기는 현상 방지)
+    df['MA5'] = df['Close'].rolling(window=5, min_periods=1).mean()
+    df['MA20'] = df['Close'].rolling(window=20, min_periods=1).mean()
+    df['Std'] = df['Close'].rolling(window=20, min_periods=1).std()
+    df['Upper'] = df['MA20'] + (df['Std'] * 2)
+    df['Lower'] = df['MA20'] - (df['Std'] * 2)
+
+    fig = go.Figure()
+
+    # (1) 볼린저 밴드 (배경 그림자)
+    fig.add_trace(go.Scatter(x=x_range, y=df['Upper'].tolist(), line=dict(width=0), hoverinfo='skip', showlegend=False))
+    fig.add_trace(go.Scatter(x=x_range, y=df['Lower'].tolist(), line=dict(width=0), fill='tonexty',
+                             fillcolor='rgba(128, 128, 128, 0.15)', hoverinfo='skip', showlegend=False))
+
+    # (2) 이동평균선
+    fig.add_trace(go.Scatter(x=x_range, y=df['MA5'].tolist(), line=dict(color='#FF4B4B', width=2), name='MA5'))
+    fig.add_trace(go.Scatter(x=x_range, y=df['MA20'].tolist(), line=dict(color='#FFA500', width=2), name='MA20'))
+
+    # (3) 캔들스틱 (봉 두께 및 색상 최적화)
+    fig.add_trace(go.Candlestick(
+        x=x_range,
+        open=[p + (1 if i % 2 == 0 else -1) for i, p in enumerate(prices)],
+        high=[p + 2 for p in prices],
+        low=[p - 2 for p in prices],
+        close=prices,
+        increasing_line_color='#FF4B4B', increasing_fillcolor='#FF4B4B',
+        decreasing_line_color='#007BFF', decreasing_fillcolor='#007BFF',  # 하락봉 파란색
+        showlegend=False
+    ))
+
+    # (4) 레이아웃 설정
+    fig.update_layout(
+        height=280,
+        margin=dict(l=5, r=5, t=5, b=5),
+        xaxis=dict(visible=False, rangeslider=dict(visible=False)),
+        yaxis=dict(visible=False),
+        paper_bgcolor='rgba(0,0,0,0)',
+        plot_bgcolor='rgba(0,0,0,0)',
+        hovermode='x'
+    )
+    return fig
+
+st.title("⚠️ AI 기술적 분석 가이드: 하락 주의 패턴")
+st.markdown("현재 시장 상황에서 발생할 수 있는 주요 하락 패턴들을 분석합니다.")
+st.divider()
+
+# 1. 표시할 패턴 리스트와 한글 제목 정의
+patterns_info = {
+    "Head & Shoulders": {
+        "title": "1. 헤드앤숄더",
+        "desc": "고점에서 세 개의 봉우리가 형성되는 패턴입니다.",
+        "risk": "상승세가 꺾이고 강력한 하락세로 전환될 때 나타나는 가장 대표적인 위험 신호입니다."
+    },
+    "Dead Cross": {
+        "title": "2. 데드크로스",
+        "desc": "단기 이평선(MA5)이 장기 이평선(MA20)을 하향 돌파합니다.",
+        "risk": "평균 가격 하락 속도가 가팔라지며 대세 하락 국면에 진입했음을 의미합니다."
+    },
+    "Double Top": {
+        "title": "3. 다중 천정형",
+        "desc": "두 번의 고점 돌파 시도가 모두 실패한 모습입니다.",
+        "risk": "강력한 저항 벽을 확인한 매수 세력이 포기하며 실망 매물이 쏟아질 수 있습니다."
+    },
+    "Bear Flag": {
+        "title": "4. 베어 플래그",
+        "desc": "급락 후 잠시 횡보하며 깃발 모양을 만드는 패턴입니다.",
+        "risk": "추가 하락을 위한 잠시 숨 고르기일 뿐, 깃발 하단을 이탈하면 다시 급락합니다."
+    },
+    "Descending Triangle": {
+        "title": "5. 하락 삼각수렴",
+        "desc": "저점은 일정하지만 고점은 계속 낮아지는 형태입니다.",
+        "risk": "매도 압력이 점차 강해지고 있으며, 지지선 붕괴 시 투매가 발생할 확률이 높습니다."
+    },
+    "Dead Cat Bounce": {
+        "title": "6. 데드 캣 바운스",
+        "desc": "폭락 중 나타나는 일시적이고 가파른 반등입니다.",
+        "risk": "추세 전환이 아닌 '가짜 반등'입니다. 속아서 추격 매수 시 큰 손실을 볼 수 있습니다."
+    }
+}
+
+# 2. 3열(Column) 생성
+cols = st.columns(3)
+
+# 3. 반복문을 돌며 열마다 차트 배치
+for idx, (p_type, info) in enumerate(patterns_info.items()):
+    with cols[idx % 3]:
+        st.subheader(info["title"])
+        fig = draw_danger_chart(p_type)
+        st.plotly_chart(fig, use_container_width=True, key=f"grid_chart_{idx}", config={'displayModeBar': False})
+
+        # 설명 및 위험 요소 추가
+        st.info(f"🔍 **상황:** {info['desc']}")
+        st.warning(f"⚠️ **위험성:** {info['risk']}")
+        st.divider()
+
+
+# =========================
+# 🔚 Footer
+# =========================
+# actual_date를 위에서 정의한 actual_valid_date로 변경
+st.markdown(f"<div style='text-align: center; color: gray; margin-top: 50px;'>🚀 v2.1 Optimized Dashboard | {actual_valid_date.strftime('%Y-%m-%d')}</div>", unsafe_allow_html=True)
+
+
