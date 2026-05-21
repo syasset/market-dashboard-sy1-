@@ -568,171 +568,174 @@ if __name__ == "__main__":
     st.markdown(f"### 📈 지수차트")
 
     if not growth.empty:
-    # ==========================================
-    # [업비트 고도화] 1. 차트 설정 팝업 제어 장치 (조건 준수)
-    # ==========================================
-    # 기존 사이드바 토글을 제거하고, 메모리 기반 단발성 팝업 설정창 구현
-    if 'chart_show_crosshair' not in st.session_state: st.session_state.chart_show_crosshair = True
-    if 'chart_show_grid' not in st.session_state: st.session_state.chart_show_grid = True
-    if 'chart_show_spikes' not in st.session_state: st.session_state.chart_show_spikes = False
+        # ==========================================
+        # [업비트 고도화] 1. 차트 설정 팝업 제어 장치 (조건 준수)
+        # ==========================================
+        # 기존 사이드바 토글을 제거하고, 메모리 기반 단발성 팝업 설정창 구현
+        if 'chart_show_crosshair' not in st.session_state: st.session_state.chart_show_crosshair = True
+        if 'chart_show_grid' not in st.session_state: st.session_state.chart_show_grid = True
+        if 'chart_show_spikes' not in st.session_state: st.session_state.chart_show_spikes = False
 
-    # 톱니바퀴 대화상자 정의
-    @st.dialog("🛠️ 차트 뷰어 보조장비 설정", width="small")
-    def show_chart_setting_popup():
-        st.write("차트의 가이드선과 격자를 커스텀하세요.")
-        st.session_state.chart_show_crosshair = st.toggle("🎯 마우스 십자 가이드선 (Crosshair)", value=st.session_state.chart_show_crosshair)
-        st.session_state.chart_show_grid = st.toggle("🌐 업비트형 정밀 그리드 격자", value=st.session_state.chart_show_grid)
-        st.session_state.chart_show_spikes = st.toggle("📏 축 연동 스파이크 라인", value=st.session_state.chart_show_spikes)
-        if st.button("설정 완료", use_container_width=True):
-            st.rerun()
 
-    # 차트 바로 우측 위에 조그맣고 정돈된 버튼 배치
-    col_dummy, col_btn = st.columns([8.5, 1.5])
-    with col_btn:
-        if st.button("🛠️ 차트 설정", use_container_width=True):
-            show_chart_setting_popup()
+        # 톱니바퀴 대화상자 정의
+        @st.dialog("🛠️ 차트 뷰어 보조장비 설정", width="small")
+        def show_chart_setting_popup():
+            st.write("차트의 가이드선과 격자를 커스텀하세요.")
+            st.session_state.chart_show_crosshair = st.toggle("🎯 마우스 십자 가이드선 (Crosshair)",
+                                                              value=st.session_state.chart_show_crosshair)
+            st.session_state.chart_show_grid = st.toggle("🌐 업비트형 정밀 그리드 격자", value=st.session_state.chart_show_grid)
+            st.session_state.chart_show_spikes = st.toggle("📏 축 연동 스파이크 라인", value=st.session_state.chart_show_spikes)
+            if st.button("설정 완료", use_container_width=True):
+                st.rerun()
 
-    # 변수 바인딩 동기화
-    show_crosshair = st.session_state.chart_show_crosshair
-    show_grid = st.session_state.chart_show_grid
-    show_spikes = st.session_state.chart_show_spikes
 
-    fig = go.Figure()
+        # 차트 바로 우측 위에 조그맣고 정돈된 버튼 배치
+        col_dummy, col_btn = st.columns([8.5, 1.5])
+        with col_btn:
+            if st.button("🛠️ 차트 설정", use_container_width=True):
+                show_chart_setting_popup()
 
-    custom_colors = [
-        "#1f77b4", "#ff7f0e", "#2ca02c", "#d62728",
-        "#9467bd", "#8c564b", "#e377c2", "#7f7f7f",
-        "#bcbd22", "#17becf"
-    ]
+        # 변수 바인딩 동기화
+        show_crosshair = st.session_state.chart_show_crosshair
+        show_grid = st.session_state.chart_show_grid
+        show_spikes = st.session_state.chart_show_spikes
 
-    last_points = []
+        fig = go.Figure()
 
-    # 2. 차트 선 그리기 (⚠️ 기존 수식 및 데이터 무결성 100% 보존)
-    for i, col in enumerate(growth.columns):
-        if col == "USDKRW":
-            continue
+        custom_colors = [
+            "#1f77b4", "#ff7f0e", "#2ca02c", "#d62728",
+            "#9467bd", "#8c564b", "#e377c2", "#7f7f7f",
+            "#bcbd22", "#17becf"
+        ]
 
-        line_color = custom_colors[i % len(custom_colors)]
+        last_points = []
 
-        fig.add_trace(go.Scatter(
-            x=growth.index,
-            y=growth[col],
-            customdata=data_krw[col],
-            name=col,
-            mode='lines',
-            line=dict(
-                width=1.5,
-                color=line_color
+        # 2. 차트 선 그리기 (⚠️ 기존 수식 및 데이터 무결성 100% 보존)
+        for i, col in enumerate(growth.columns):
+            if col == "USDKRW":
+                continue
+
+            line_color = custom_colors[i % len(custom_colors)]
+
+            fig.add_trace(go.Scatter(
+                x=growth.index,
+                y=growth[col],
+                customdata=data_krw[col],
+                name=col,
+                mode='lines',
+                line=dict(
+                    width=1.5,
+                    color=line_color
+                ),
+                marker=dict(line=dict(width=0)),
+                # [가독성 혁신] 마우스가 위치한 특정 '선 위'에서만 독립적으로 작동하는 풍선 도움말 양식
+                hovertemplate="<b>📈 %{fullData.name}</b><br>📅 %{x|%Y-%m-%d}<br>변화율: %{y:.2f}%<br>현재가: %{customdata:,.0f}원<extra></extra>"
+            ))
+
+            last_points.append({
+                "col": col,
+                "y": growth[col].iloc[-1],
+                "val": data_krw[col].iloc[-1],
+                "color": line_color
+            })
+
+        fig.update_traces(line=dict(width=1.5))
+
+        # 3. 우측 태그 로직 (기존 동일 유지)
+        last_points.sort(key=lambda x: x['y'], reverse=True)
+
+        for i, p in enumerate(last_points):
+            is_right = i % 2 == 0
+            side_offset = 60 if is_right else -60
+            x_anchor = "left" if is_right else "right"
+
+            fig.add_annotation(
+                x=growth.index[-1],
+                y=p['y'],
+                text=f"<b>{p['col']}</b><br>{p['val']:,.0f}",
+                showarrow=True,
+                arrowhead=2,
+                arrowsize=1,
+                arrowwidth=1.5,
+                arrowcolor=p['color'],
+                ax=side_offset,
+                ay=0,
+                xanchor=x_anchor,
+                yanchor="middle",
+                font=dict(size=11, color="white"),
+                bgcolor=p['color'],
+                opacity=0.9,
+                bordercolor="white",
+                borderwidth=1,
+                borderpad=4
+            )
+
+        # ==========================================
+        # 4. 레이아웃 및 UX 옵티마이저 (독립형 호버 반영)
+        # ==========================================
+        spike_mode = "across+toaxis" if show_spikes else ""
+        grid_color = "rgba(255, 255, 255, 0.05)" if show_grid else "rgba(0,0,0,0)"
+
+        fig.update_layout(
+            paper_bgcolor="#0b111e",
+            plot_bgcolor="#0b111e",
+            font=dict(color="#9aa4b2", family="Pretendard, Inter, sans-serif"),
+            dragmode="pan",
+            height=650,
+            uirevision='constant',
+            margin=dict(l=40, r=130, t=30, b=40),  # 버튼과의 간격을 위해 상단 마진 최적화
+            showlegend=True,
+            legend=dict(
+                orientation="h",
+                yanchor="bottom",
+                y=1.02,
+                xanchor="right",
+                x=1,
+                font=dict(size=11, color="#9aa4b2"),
+                bgcolor="rgba(0,0,0,0)"
             ),
-            marker=dict(line=dict(width=0)),
-            # [가독성 혁신] 마우스가 위치한 특정 '선 위'에서만 독립적으로 작동하는 풍선 도움말 양식
-            hovertemplate="<b>📈 %{fullData.name}</b><br>📅 %{x|%Y-%m-%d}<br>변화율: %{y:.2f}%<br>현재가: %{customdata:,.0f}원<extra></extra>"
-        ))
-
-        last_points.append({
-            "col": col,
-            "y": growth[col].iloc[-1],
-            "val": data_krw[col].iloc[-1],
-            "color": line_color
-        })
-
-    fig.update_traces(line=dict(width=1.5))
-
-    # 3. 우측 태그 로직 (기존 동일 유지)
-    last_points.sort(key=lambda x: x['y'], reverse=True)
-
-    for i, p in enumerate(last_points):
-        is_right = i % 2 == 0
-        side_offset = 60 if is_right else -60
-        x_anchor = "left" if is_right else "right"
-
-        fig.add_annotation(
-            x=growth.index[-1],
-            y=p['y'],
-            text=f"<b>{p['col']}</b><br>{p['val']:,.0f}",
-            showarrow=True,
-            arrowhead=2,
-            arrowsize=1,
-            arrowwidth=1.5,
-            arrowcolor=p['color'],
-            ax=side_offset,
-            ay=0,
-            xanchor=x_anchor,
-            yanchor="middle",
-            font=dict(size=11, color="white"),
-            bgcolor=p['color'],
-            opacity=0.9,
-            bordercolor="white",
-            borderwidth=1,
-            borderpad=4
+            xaxis=dict(
+                showgrid=show_grid,
+                gridcolor=grid_color,
+                gridwidth=0.5,
+                range=[growth.index, growth.index[-1] + pd.Timedelta(days=10)],
+                tickfont=dict(size=11, color="#6c7a89"),
+                showspikes=show_spikes,
+                spikemode=spike_mode if show_spikes else None,
+                spikethickness=1,
+                spikecolor="rgba(255, 255, 255, 0.3)",
+                spikedash="dash"
+            ),
+            yaxis=dict(
+                zeroline=True,
+                zerolinecolor="rgba(255,255,255,0.15)",
+                showgrid=show_grid,
+                gridcolor=grid_color,
+                gridwidth=0.5,
+                side="right",
+                tickfont=dict(size=11, color="#6c7a89"),
+                showspikes=show_spikes,
+                spikemode=spike_mode if show_spikes else None,
+                spikethickness=1,
+                spikecolor="rgba(255, 255, 255, 0.3)",
+                spikedash="dash"
+            ),
+            # 🎯 [핵심 수정] 한 창에 몰아 뜨는 뭉텅이 데이터 창을 해제하고,
+            # 마우스가 닿은 근접 단일 타겟 선 정보만 직관적으로 표시하게 격리함.
+            hovermode="closest" if show_crosshair else "closest"
         )
 
-    # ==========================================
-    # 4. 레이아웃 및 UX 옵티마이저 (독립형 호버 반영)
-    # ==========================================
-    spike_mode = "across+toaxis" if show_spikes else "" 
-    grid_color = "rgba(255, 255, 255, 0.05)" if show_grid else "rgba(0,0,0,0)"
-
-    fig.update_layout(
-        paper_bgcolor="#0b111e",
-        plot_bgcolor="#0b111e",
-        font=dict(color="#9aa4b2", family="Pretendard, Inter, sans-serif"),
-        dragmode="pan",
-        height=650,
-        uirevision='constant',
-        margin=dict(l=40, r=130, t=30, b=40), # 버튼과의 간격을 위해 상단 마진 최적화
-        showlegend=True,
-        legend=dict(
-            orientation="h",
-            yanchor="bottom",
-            y=1.02,
-            xanchor="right",
-            x=1,
-            font=dict(size=11, color="#9aa4b2"),
-            bgcolor="rgba(0,0,0,0)"
-        ),
-        xaxis=dict(
-            showgrid=show_grid,
-            gridcolor=grid_color,
-            gridwidth=0.5,
-            range=[growth.index, growth.index[-1] + pd.Timedelta(days=10)],
-            tickfont=dict(size=11, color="#6c7a89"),
-            showspikes=show_spikes,
-            spikemode=spike_mode if show_spikes else None,
-            spikethickness=1,
-            spikecolor="rgba(255, 255, 255, 0.3)",
-            spikedash="dash"
-        ),
-        yaxis=dict(
-            zeroline=True,
-            zerolinecolor="rgba(255,255,255,0.15)",
-            showgrid=show_grid,
-            gridcolor=grid_color,
-            gridwidth=0.5,
-            side="right",
-            tickfont=dict(size=11, color="#6c7a89"),
-            showspikes=show_spikes,
-            spikemode=spike_mode if show_spikes else None,
-            spikethickness=1,
-            spikecolor="rgba(255, 255, 255, 0.3)",
-            spikedash="dash"
-        ),
-        # 🎯 [핵심 수정] 한 창에 몰아 뜨는 뭉텅이 데이터 창을 해제하고,
-        # 마우스가 닿은 근접 단일 타겟 선 정보만 직관적으로 표시하게 격리함.
-        hovermode="closest" if show_crosshair else "closest"
-    )
-
-    # [PC & 모바일 연동 인풋 세트 리프레시]
-    st.plotly_chart(
-        fig, 
-        use_container_width=True, 
-        config={
-            "scrollZoom": True,
-            "displayModeBar": False,           # 설정 팝업이 따로 생겼으므로 상단 기본 바는 가독성을 위해 숨김
-            "responsive": True,
-            "doubleClick": "reset"
-        }
-    )
+        # [PC & 모바일 연동 인풋 세트 리프레시]
+        st.plotly_chart(
+            fig,
+            use_container_width=True,
+            config={
+                "scrollZoom": True,
+                "displayModeBar": False,  # 설정 팝업이 따로 생겼으므로 상단 기본 바는 가독성을 위해 숨김
+                "responsive": True,
+                "doubleClick": "reset"
+            }
+        )
 
 # =========================
 # 🌍 매크로 차트
@@ -1986,7 +1989,6 @@ for idx, (p_type, info) in enumerate(patterns_info.items()):
 st.markdown(
     f"<div style='text-align: center; color: gray; margin-top: 50px;'>🚀 v2.1 Optimized Dashboard | {actual_valid_date.strftime('%Y-%m-%d')}</div>",
     unsafe_allow_html=True)
-
 
 
 
