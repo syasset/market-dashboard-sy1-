@@ -668,9 +668,9 @@ if __name__ == "__main__":
                 borderpad=4
             )
 
-        # 💡 [중요 수정] 여기서부터는 자산 루프(for문) 밖으로 완전히 탈출시켜 단 한 번만 실행합니다.
+        # 🔔 [완벽 교정] 루프 종료 후 실행영역 (공백 4칸 라인 일치)
         # ==========================================
-        # 4. 레이아웃 및 UX 옵티마이저 (모바일 핀치 줌 하이퍼 튜닝)
+        # 4. 레이아웃 및 UX 옵티마이저 (하이브리드 터치 및 자석식 호버 튜닝)
         # ==========================================
         spike_mode = "across+toaxis" if show_spikes else ""
         grid_color = "rgba(255, 255, 255, 0.05)" if show_grid else "rgba(0,0,0,0)"
@@ -679,7 +679,9 @@ if __name__ == "__main__":
             paper_bgcolor="#0b111e",
             plot_bgcolor="#0b111e",
             font=dict(color="#9aa4b2", family="Pretendard, Inter, sans-serif"),
-            dragmode="zoom",
+
+            # 🎯 기본 드래그 동작을 '이동(pan)'으로 고정하여 하이브리드 터치 지원
+            dragmode="pan",
             height=650,
             uirevision='constant',
             margin=dict(l=40, r=130, t=30, b=40),
@@ -697,7 +699,7 @@ if __name__ == "__main__":
                 showgrid=show_grid,
                 gridcolor=grid_color,
                 gridwidth=0.5,
-                # 💡 [오타 수정] 기존 코드의 range=[growth.index, ...] 에서 index 뒤에을 추가해 시작 날짜를 명시했습니다.
+                # 🎯 [오타 교정] growth.index -> growth.index 으로 시작 위치 바인딩 정상화
                 range=[growth.index, growth.index[-1] + pd.Timedelta(days=10)],
                 tickfont=dict(size=11, color="#6c7a89"),
                 showspikes=show_spikes,
@@ -722,10 +724,14 @@ if __name__ == "__main__":
                 spikedash="dash",
                 fixedrange=False
             ),
-            hovermode="closest"
+
+            # 🎯 자석식 호버 트래킹 반경 50px 지정
+            hovermode="closest",
+            hoverdistance=50,
+            spikedistance=50
         )
 
-        # 🎯 [모바일 튜닝 2] 인풋 하이브리드 엔진 고도화 - 1개만 그리도록 스코프 변경 완료
+        # 🎯 최종 캔버스 단 1개만 화면에 렌더링하도록 밖으로 추출 완료
         st.plotly_chart(
             fig,
             use_container_width=True,
@@ -1989,6 +1995,8 @@ for idx, (p_type, info) in enumerate(patterns_info.items()):
 st.markdown(
     f"<div style='text-align: center; color: gray; margin-top: 50px;'>🚀 v2.1 Optimized Dashboard | {actual_valid_date.strftime('%Y-%m-%d')}</div>",
     unsafe_allow_html=True)
+
+
 
 
 
