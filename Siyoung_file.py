@@ -731,12 +731,24 @@ if __name__ == "__main__":
             spikedistance=50
         )
 
-        # 🎯 최종 캔버스 단 1개만 화면에 렌더링하도록 밖으로 추출 완료
+        st.markdown(
+            """
+            <style>
+            .stPlotlyChart iframe, .stPlotlyChart div {
+                touch-action: none !important;
+                -webkit-text-size-adjust: none !important;
+            }
+            </style>
+            """,
+            unsafe_allow_html=True
+        )
+
+        # 🎯 최종 캔버스 렌더링 (동일 유지)
         st.plotly_chart(
             fig,
             use_container_width=True,
             config={
-                "scrollZoom": True,
+                "scrollZoom": True,  # 이 옵션이 터치 핀치 줌을 처리합니다.
                 "displayModeBar": False,
                 "responsive": True,
                 "doubleClick": "reset"
@@ -1995,8 +2007,6 @@ for idx, (p_type, info) in enumerate(patterns_info.items()):
 st.markdown(
     f"<div style='text-align: center; color: gray; margin-top: 50px;'>🚀 v2.1 Optimized Dashboard | {actual_valid_date.strftime('%Y-%m-%d')}</div>",
     unsafe_allow_html=True)
-
-
 
 
 
