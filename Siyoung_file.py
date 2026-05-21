@@ -1149,25 +1149,31 @@ if __name__ == "__main__":
         sectors_list = list(growth_sector.columns)
 
         st.markdown("---")
+
+        # 상단 플로팅 버튼에서 정의한 설정값 매핑 동기화
+        spike_mode_s = "across+toaxis" if show_spikes else ""
+        grid_color_s = "rgba(255, 255, 255, 0.05)" if show_grid else "rgba(0,0,0,0)"
+
         for i in range(0, len(sectors_list), 2):
             row_cols = st.columns(2)
             for j in range(2):
                 if i + j < len(sectors_list):
                     sector_name = sectors_list[i + j]
-                    sector_color = colors[(i + j) % len(colors)]
+
+                    # RGB 추출 편의를 위해 헥사코드 보정 및 RGB 파싱 가드
+                    raw_color = colors[(i + j) % len(colors)]
+                    hex_color = raw_color.lstrip('#')
+                    r, g, b = int(hex_color[0:2], 16), int(hex_color[2:4], 16), int(hex_color[4:6], 16)
 
                     # 1. 해당 섹터 데이터 추출 및 결측치 제거
                     raw_series = growth_sector[sector_name].dropna()
 
-                    # 데이터가 2개 이상 있어야 '변화'를 그릴 수 있습니다.
                     if len(raw_series) > 1:
-                        base_val = float(raw_series.values[0])  # 첫 값을 확실하게 실수(float)로 변환
-
-                        # 기준값이 0이면 나누기가 안 되므로 아주 작은 값으로 대체하거나 스킵
+                        base_val = float(raw_series.values[0])
                         if base_val == 0:
                             base_val = 1e-9
 
-                            # 누적 수익률 계산
+                        # 누적 수익률 계산
                         cumulative_returns = (raw_series / base_val - 1) * 100
 
                         with row_cols[j]:
@@ -1175,37 +1181,80 @@ if __name__ == "__main__":
                             fig.add_trace(go.Scatter(
                                 x=cumulative_returns.index,
                                 y=cumulative_returns.values,
-                                mode="lines+markers",  # 데이터 포인트가 적을 땐 마커를 쓰는 게 확실합니다
-                                line=dict(width=3, color=sector_color),
+                                mode="lines",  # 모바일 연동 및 차트 통일감을 위해 깔끔한 선 스타일로 변경
+                                line=dict(width=2, color=raw_color),
                                 fill='tozeroy',
-                                fillcolor=f"rgba({int(sector_color[1:3], 16)}, {int(sector_color[3:5], 16)}, {int(sector_color[5:7], 16)}, 0.1)",
-                                hovertemplate="<b>%{x|%y.%m.%d}</b><br>수익률: %{y:.2f}%<extra></extra>"
+                                fillcolor=f"rgba({r}, {g}, {b}, 0.06)",  # 은은한 하단 그라데이션 광원
+                                hovertemplate=f"<b>📊 {sector_name}</b><br>📅 %{{x|%Y-%m-%d}}<br>누적수익률: %{{y:.2f}}%<extra></extra>"
                             ))
 
-                            # Y축 범위를 데이터에 맞춰 자동 조절 (일직선 방지)
+                            # Y축 범위를 데이터에 맞춰 자동 조절 (위아래 여백 0.5%)
                             y_min = cumulative_returns.min()
                             y_max = cumulative_returns.max()
-                            # 위아래로 약간의 여백(0.5%)을 강제로 줍니다.
                             y_range = [y_min - 0.5, y_max + 0.5]
 
                             fig.update_layout(
-                                title=f"📈 {sector_name} 누적 수익률 (%)",
-                                height=300,
-                                margin=dict(l=40, r=20, t=50, b=40),
-                                xaxis=dict(tickformat="%y.%m.%d", showgrid=True),
-                                yaxis=dict(
-                                    range=y_range,  # 강제 범위 설정으로 미세한 변화도 보이게 함
-                                    showgrid=True,
-                                    zeroline=True,
-                                    zerolinewidth=2,
-                                    zerolinecolor='rgba(0,0,0,0.3)',
-                                    ticksuffix="%"
+                                title=dict(
+                                    text=f"📈 {sector_name} 누적 수익률",
+                                    font=dict(size=13, color="#9aa4b2")
                                 ),
-                                plot_bgcolor="rgba(0,0,0,0)",
-                                showlegend=False
-                            )
-                            st.plotly_chart(fig, use_container_width=True, key=f"chart_cum_fix_{sector_name}")
+                                paper_bgcolor="#0b111e",
+                                plot_bgcolor="#0b111e",
+                                font=dict(color="#9aa4b2", family="Pretendard, Inter, sans-serif"),
+                                dragmode="pan",  # 하이브리드 모바일 이동 제어 이식
+                                height=300,
+                                uirevision='constant',
+                                margin=dict(l=40, r=40, t=50, b=40),
+                                showlegend=False,
 
+                                xaxis=dict(
+                                    showgrid=show_grid,
+                                    gridcolor=grid_color_s,
+                                    gridwidth=0.5,
+                                    tickfont=dict(size=10, color="#6c7a89"),
+                                    showspikes=show_spikes,
+                                    spikemode=spike_mode_s if show_spikes else None,
+                                    spikethickness=1,
+                                    spikecolor="rgba(255, 255, 255, 0.3)",
+                                    spikedash="dash",
+                                    fixedrange=False
+                                ),
+                                yaxis=dict(
+                                    range=y_range,
+                                    zeroline=True,
+                                    zerolinecolor="rgba(255,255,255,0.15)",
+                                    showgrid=show_grid,
+                                    gridcolor=grid_color_s,
+                                    gridwidth=0.5,
+                                    side="right",  # 메인 차트들과 인터페이스(Y축 우측 배치) 통일
+                                    tickfont=dict(size=10, color="#6c7a89"),
+                                    ticksuffix="%",
+                                    showspikes=show_spikes,
+                                    spikemode=spike_mode_s if show_spikes else None,
+                                    spikethickness=1,
+                                    spikecolor="rgba(255, 255, 255, 0.3)",
+                                    spikedash="dash",
+                                    fixedrange=False
+                                ),
+                                # 🎯 자석식 단일 종목 타겟팅 호버 적용
+                                hovermode="closest" if show_crosshair else False,
+                                hoverdistance=50,
+                                spikedistance=50
+                            )
+
+                            st.plotly_chart(
+                                fig,
+                                use_container_width=True,
+                                key=f"chart_cum_fix_{sector_name}",
+                                config={
+                                    "scrollZoom": True,
+                                    "displayModeBar": False,
+                                    "responsive": True,
+                                    "doubleClick": "reset"
+                                }
+                            )
+
+                            # 하단 종목 확인 익스팬더 존 (기존 기능 100% 보존)
                             with st.expander(f"🔍 {sector_name} 구성종목 확인"):
                                 if sector_name in sector_map:
                                     names = sector_map[sector_name]["names"]
@@ -1213,9 +1262,7 @@ if __name__ == "__main__":
 
                                     st.write("💡 세부내용은 종목명을 클릭하세요.")
 
-                                    # 버튼을 한 줄에 여러 개 배치하거나 리스트로 배치
                                     for name, code in zip(names, codes):
-                                        # 클릭 시 팝업 함수 실행
                                         if st.button(f"{name} ({code})", key=f"popup_{sector_name}_{code}"):
                                             show_stock_detail(code, name, data_sector_krw)
                                 else:
@@ -2069,5 +2116,7 @@ for idx, (p_type, info) in enumerate(patterns_info.items()):
 st.markdown(
     f"<div style='text-align: center; color: gray; margin-top: 50px;'>🚀 v2.1 Optimized Dashboard | {actual_valid_date.strftime('%Y-%m-%d')}</div>",
     unsafe_allow_html=True)
+
+
 
 
