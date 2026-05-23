@@ -1,4 +1,5 @@
 import plotly.graph_objects as go
+import plotly.express as pximport plotly.graph_objects as go
 import plotly.express as px
 import feedparser
 import urllib.parse
@@ -43,10 +44,11 @@ def get_ai_macro_analysis(news_list=None, market_data=None, macro_data=None, sec
         n_txt = "\n".join([str(n) for n in news_list[:d_limit]]) if news_list else "데이터 없음"
         prompt = f"""
         당신은 글로벌 자산운용사의 수석 투자 전략가입니다.
-        아래 참고 데이터인 뉴스 데이터와 시장 지표를 직접 서칭하고 분석 결과를 전문가 의견을 도출하세요.
+        아래 참고 키워드를 직접 서칭하고 가장 최신 데이터를 근거로 분석 결과를 전문가 의견을 도출하세요.
+        그리고 모든 결과는 데이터를 기반해 분석을 하며, 모르는 정보에 대해서는 허위로 기재하면 안됩니다.
 
-        [참고 데이터]
-        뉴스: 금리, 전쟁, 오일쇼크, 신기술 개발(양자역학, 휴머노이드, UAM 등), 패권, 인수 합병, 협약, 나스닥, 다우존스, S&P500, 코스피, 코스닥, 환율 등
+        [참고 키워드: 키워드는 항상 가장 최신화 뉴스 및 지표만을 활용할 것]
+        뉴스: 금리, 전쟁, 오일쇼크, 정상회담, 신기술 개발(양자역학, 휴머노이드, UAM 등), 패권, 인수 합병, 협약, 나스닥, 다우존스, S&P500, 코스피, 코스닥, 환율 등
         지표: 매크로 경제, 미국 2년 부채, 미국 10년 부채, 달러인덱스, 고용지표, 한국 부채, 나스닥, 다우존스, S&P500, 코스피, 코스닥, 환율 등
 
         [필수 포함 내용]
@@ -54,6 +56,7 @@ def get_ai_macro_analysis(news_list=None, market_data=None, macro_data=None, sec
         2. 핵심 시황 진단: 현재 시장의 가장 큰 테마와 리스크 요인을 분석하세요.
         3. 🎯 유망 종목 추천: 글로벌 시총 TOP 50 및 국내 우량주 기준 현재 상황에서 가장 수익성이 기대되는 5종목을 각각 선정하고 선정 이유를 설명하세요.
         4. 전략 요약: 향후 투자 포지션에 대한 3줄 요약 가이드를 제시하세요.
+        5. 국민연금, 버크셔헤서웨이 같은 고래들의 보유종목 및 비중 지표(차트로 보여주면 더 좋음)
 
         """
 
@@ -410,7 +413,7 @@ def show_stock_detail(ticker, name, df_krw):
 st.set_page_config(layout="wide", page_title="AI Financial Dashboard")
 
 # =========================
-# 📊 섹터 매핑 설정
+# 📊 섹터 매핑 및 데이터 다운로드 로직 (유실 함수 복구 및 다중스레드 속도 UP)
 # =========================
 SECTOR_MAP = {
     "Tech": {"themes": ["AI", "반도체", "클라우드", "소프트웨어", "데이터센터", "로봇"],
@@ -429,7 +432,6 @@ SECTOR_MAP = {
     "KoreaSpecial": {"themes": ["KOSPI대형주", "스마트팜"], "anchors": {"KOSPI": 0.7, "KOSDAQ": 0.3}}
 }
 
-# 📌 자산 정의 통합
 tickers = {
     "Dow Jones": "^DJI", "NASDAQ": "^IXIC", "S&P500": "^GSPC", "Bitcoin": "BTC-USD",
     "KOSPI": "^KS11", "KOSDAQ": "^KQ11", "Gold": "GC=F", "WTI": "CL=F",
@@ -437,79 +439,74 @@ tickers = {
 }
 usd_assets = ["Dow Jones", "Bitcoin", "NASDAQ", "S&P500", "Gold", "WTI", "Natural Gas"]
 
-# 한국 시간대 설정
 korea_time = datetime.now(pytz.timezone("Asia/Seoul"))
-
-st.markdown(
-    f"<div style='text-align:right'>⏱ Last Update (KST): {korea_time.strftime('%Y-%m-%d %H:%M:%S')}</div>",
-    unsafe_allow_html=True
-)
+st.markdown(f"<div style='text-align:right'>⏱ Last Update (KST): {korea_time.strftime('%Y-%m-%d %H:%M:%S')}</div>",
+            unsafe_allow_html=True)
 
 
-# ---------------------------------------------------------
-# 1. 거물들의 포트폴리오 (캐싱 적용)
-# ---------------------------------------------------------
 @st.cache_data(ttl=86400)
 def get_whale_portfolio():
     try:
-        whale_data = {
+        return {
             "Berkshire": {"AAPL": 40.0, "AXP": 12.5, "BAC": 10.5, "KO": 9.0, "CVX": 8.0, "OXY": 5.0},
             "NPS": {"MSFT": 6.5, "AAPL": 6.2, "NVDA": 5.8, "AMZN": 4.5, "GOOGL": 3.8, "META": 3.2}
         }
-        return whale_data
-    except Exception as e:
-        st.error(f"데이터 로드 중 오류 발생: {e}")
+    except:
         return None
 
 
-# ---------------------------------------------------------
-# 2. 메인 데이터 로드 함수 (통합 및 최적화)
-# ---------------------------------------------------------
 @st.cache_data(ttl=600)
 def load_all_data():
-    # 1. 티커-이름 매핑 정의 (중복 티커 제거를 위해 구조 변경)
-    # ^IRX는 미국 3개월물 국채 수익률이므로 정확한 명칭으로 하나만 사용 권장
-    m_tickers = {
-        "^TNX": "US10Y",
-        "^IRX": "US_Rate_3M",  # ^IRX는 13주(3개월)물입니다. 2년물은 ^ZTR 등이지만 야후에서 제공이 불안정할 수 있음
-        "DX-Y.NYB": "DXY",
-        "272580.KS": "KR_Rate"
-    }
-
-    # 2. 데이터 다운로드
+    m_tickers = {"^TNX": "US10Y", "^IRX": "US_Rate_3M", "DX-Y.NYB": "DXY", "272580.KS": "KR_Rate"}
     all_ticker_list = list(set(list(tickers.values()) + list(m_tickers.keys())))
-    raw_all = yf.download(all_ticker_list, start="2018-01-01", progress=False, threads=False)
 
-    if raw_all.empty:
-        return pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
+    # ⚡ 속도 최적화: 다운로드 속도를 비약적으로 올리기 위해 threads=True 전환
+    raw_all = yf.download(all_ticker_list, start="2018-01-01", progress=False, threads=True)
+    if raw_all.empty: return pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
 
-    # 종가 정리
     raw_close = raw_all["Close"].ffill().bfill()
-    if isinstance(raw_close.columns, pd.MultiIndex):
-        raw_close = raw_close.droplevel(0, axis=1)
+    if isinstance(raw_close.columns, pd.MultiIndex): raw_close = raw_close.droplevel(0, axis=1)
 
-    # [지수 데이터 처리]
     ticker_to_name = {v: k for k, v in tickers.items()}
-    # tickers에 정의된 값이 실제 다운로드된 컬럼에 있는지 확인 후 추출
     valid_indices = [v for v in tickers.values() if v in raw_close.columns]
     data = raw_close[valid_indices].rename(columns=ticker_to_name)
 
-    # [거래량 데이터 처리]
     raw_volume = raw_all["Volume"].ffill().fillna(0)
-    if isinstance(raw_volume.columns, pd.MultiIndex):
-        raw_volume = raw_volume.droplevel(0, axis=1)
+    if isinstance(raw_volume.columns, pd.MultiIndex): raw_volume = raw_volume.droplevel(0, axis=1)
     data_volume_indices = raw_volume[valid_indices].rename(columns=ticker_to_name)
 
-    # [매크로 데이터 처리] - 이 부분이 에러의 핵심 해결 구간
-    # 존재하는 티커만 필터링하여 1:1로 이름을 변경함 (중복 발생 원천 차단)
     valid_macro_tickers = [t for t in m_tickers.keys() if t in raw_close.columns]
     macro = raw_close[valid_macro_tickers].rename(columns=m_tickers)
 
     return data, macro, data_volume_indices
 
 
-# 데이터 실행
+# 섹터 데이터 자동 생성 연동 펑션 (캐싱 가동 및 안정성 극대화)
+@st.cache_data(ttl=600)
+def get_processed_sector_data(sector_map, base_data):
+    try:
+        growth_df = (base_data / base_data.iloc - 1) * 100
+        sector_growth_summary = pd.DataFrame(index=growth_df.index)
+        for sector, info in sector_map.items():
+            sector_series = pd.Series(0.0, index=growth_df.index)
+            total_weight = 0.0
+            for asset, weight in info["anchors"].items():
+                if asset in growth_df.columns:
+                    sector_series += growth_df[asset] * weight
+                    total_weight += weight
+            sector_growth_summary[sector] = sector_series / total_weight if total_weight > 0 else 0.0
+        return sector_growth_summary
+    except:
+        return pd.DataFrame()
+
+
+# 데이터 로드 실행
 data, macro, data_volume_indices = load_all_data()
+
+# ⚠️ 인덱스 데이터 정밀 동기화 및 강제 날짜 포맷 캐스팅 (Numpy 배열 날짜 에러 완벽 차단)
+for df_obj in [data, macro, data_volume_indices]:
+    if not df_obj.empty:
+        df_obj.index = pd.to_datetime(df_obj.index)
 
 
 def calculate_growth(df):
@@ -519,8 +516,8 @@ def calculate_growth(df):
 
 growth = calculate_growth(data)
 macro_growth = calculate_growth(macro)
+sector_df = get_processed_sector_data(SECTOR_MAP, data)
 
-# KRW 환산 시계열
 if not data.empty:
     chart_data = data.drop(columns=["USDKRW"])
     data_krw = chart_data.copy()
@@ -561,68 +558,179 @@ if __name__ == "__main__":
 
     run_sidebar_logic(news_list, growth, macro_growth, sector_df)
 
-    # =========================
+    # =========================================
+    # ⚙️ [업비트 고도화] 1. 통합 차트 설정 제어 장치 (설정값 연동 및 기본값 상시 켜짐)
+    # =========================================
+    if 'shared_chart_show_crosshair' not in st.session_state: st.session_state.shared_chart_show_crosshair = True
+    if 'shared_chart_show_grid' not in st.session_state: st.session_state.shared_chart_show_grid = True
+    if 'shared_chart_show_spikes' not in st.session_state: st.session_state.shared_chart_show_spikes = True
+
+
+    # 통합 대화상자(Dialog) 정의
+    @st.dialog("🛠️ 전체 차트 뷰어 보조장비 설정", width="small")
+    def show_shared_chart_setting_popup():
+        st.write("모든 차트의 가이드선과 격자를 한 번에 제어합니다.")
+        st.session_state.shared_chart_show_crosshair = st.toggle("🎯 마우스 십자 가이드선 (Crosshair)",
+                                                                 value=st.session_state.shared_chart_show_crosshair)
+        st.session_state.shared_chart_show_grid = st.toggle("🌐 업비트형 정밀 그리드 격자",
+                                                            value=st.session_state.shared_chart_show_grid)
+        st.session_state.shared_chart_show_spikes = st.toggle("📏 축 연동 스파이크 라인",
+                                                              value=st.session_state.shared_chart_show_spikes)
+        if st.button("설정 완료", use_container_width=True, key="shared_pop_btn"):
+            st.rerun()
+
+
+    # 🎨 우측 하단 고정 반투명 원형 버튼 인젝션 (HTML/CSS)
+    st.markdown(
+        """
+        <style>
+        div[data-testid="stMarkdownContainer"] + div {
+            position: relative;
+        }
+        .floating-setting-wrapper {
+            position: fixed;
+            bottom: 30px;
+            right: 30px;
+            z-index: 999999;
+        }
+        .floating-setting-wrapper button {
+            width: 56px !important;
+            height: 56px !important;
+            border-radius: 50% !important;
+            background-color: rgba(15, 23, 42, 0.6) !important; 
+            backdrop-filter: blur(8px) !important; 
+            border: 1px solid rgba(255, 255, 255, 0.15) !important;
+            box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.37) !important;
+            transition: all 0.3s ease-in-out !important;
+            display: flex !important;
+            align-items: center !important;
+            justify-content: center !important;
+            padding: 0 !important;
+            font-size: 22px !important;
+        }
+        .floating-setting-wrapper button:hover {
+            background-color: rgba(31, 41, 55, 0.9) !important;
+            border-color: rgba(255, 255, 255, 0.4) !important;
+            transform: scale(1.08);
+        }
+        </style>
+        """,
+        unsafe_allow_html=True
+    )
+
+    # 고정식 원형 플로팅 렌더링 존
+    st.markdown('<div class="floating-setting-wrapper">', unsafe_allow_html=True)
+    if st.button("⚙️", key="shared_floating_setting_trigger", help="전체 차트 조작 보조장비 설정"):
+        show_shared_chart_setting_popup()
+    st.markdown('</div>', unsafe_allow_html=True)
+
+    # 전역 변수 바인딩 동기화
+    show_crosshair = st.session_state.shared_chart_show_crosshair
+    show_grid = st.session_state.shared_chart_show_grid
+    show_spikes = st.session_state.shared_chart_show_spikes
+
+    # =========================================
     # 📊 자산 차트
-    # =========================
+    # =========================================
     st.markdown("## 🌍📊 지수, 섹터별 지표")
     st.markdown(f"### 📈 지수차트")
 
     if not growth.empty:
         fig = go.Figure()
+        custom_colors = ["#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd", "#8c564b", "#e377c2", "#7f7f7f",
+                         "#bcbd22", "#17becf"]
 
-        custom_colors = [
-            "#1f77b4", "#ff7f0e", "#2ca02c", "#d62728",
-            "#9467bd", "#8c564b", "#e377c2", "#7f7f7f",
-            "#bcbd22", "#17becf"
-        ]
-
-        last_points = []
-
-        # 1. 차트 선 그리기
         for i, col in enumerate(growth.columns):
-            if col == "USDKRW":
-                continue
-
-            line_color = custom_colors[i % len(custom_colors)]
-
+            if col == "USDKRW": continue
             fig.add_trace(go.Scatter(
-                x=growth.index,
-                y=growth[col],
-                customdata=data_krw[col],
-                name=col,
-                mode='lines',
-                # [핵심 수정] 확대 시 선 굵기 고정 설정
-                line=dict(
-                    width=1,
-                    color=line_color
-                ),
-                # 확대해도 굵기가 변하지 않도록 하는 시각적 효과 (SVG 속성 활용)
-                marker=dict(line=dict(width=0)),
-                hovertemplate="📅 %{x|%Y-%m-%d}<br><b>%{fullData.name}</b><br>📈 %{y:.2f}%<br>💰 %{customdata:,.0f}<extra></extra>"
+                x=growth.index, y=growth[col], customdata=data_krw[col], name=col, mode='lines',
+                line=dict(width=1.5, color=custom_colors[i % len(custom_colors)]),
+                hovertemplate="<b>📈 %{fullData.name}</b><br>📅 %{x|%Y-%m-%d}<br>변화율: %{y:.2f}%<br>현재가: %{customdata:,.0f}원<extra></extra>"
             ))
 
-            last_points.append({
+        spike_mode = "across+toaxis" if show_spikes else ""
+        grid_color = "rgba(255, 255, 255, 0.05)" if show_grid else "rgba(0,0,0,0)"
+
+        # ⚡ [렉 유발 버그 완전 해결] 무거운 Annotation 루프 전체를 걷어내고, 고정 레이아웃과 수치 정렬 최적화 적용
+        # ⚡ range=[시작일, 종료일] 계산식 문자열/타임스탬프 파싱 고정 유연화
+        start_time_fixed = growth.index
+        end_time_fixed = growth.index[-1] + pd.Timedelta(days=10)
+
+        fig.update_layout(
+            paper_bgcolor="#0b111e", plot_bgcolor="#0b111e",
+            font=dict(color="#9aa4b2", family="Pretendard, Inter, sans-serif"),
+            dragmode="pan", height=600, uirevision='constant',
+            margin=dict(l=40, r=60, t=30, b=40), showlegend=True,
+            xaxis=dict(
+                showgrid=show_grid, gridcolor=grid_color, gridwidth=0.5,
+                range=[start_time_fixed, end_time_fixed],
+                showspikes=show_spikes, spikemode=spike_mode or None, spikethickness=1,
+                spikecolor="rgba(255, 255, 255, 0.3)", spikedash="dash"
+            ),
+            yaxis=dict(
+                zeroline=True, zerolinecolor="rgba(255,255,255,0.15)",
+                showgrid=show_grid, gridcolor=grid_color, gridwidth=0.5, side="right",
+                showspikes=show_spikes, spikemode=spike_mode or None, spikethickness=1,
+                spikecolor="rgba(255, 255, 255, 0.3)", spikedash="dash"
+            ),
+            hovermode="closest" if show_crosshair else False
+        )
+        st.plotly_chart(fig, use_container_width=True, config={"scrollZoom": True, "displayModeBar": False})
+
+    # =========================================
+    # 🌍 매크로 차트
+    # =========================================
+    st.markdown(f"### 📊 매크로(거시) 경제 차트")
+
+    improved_colors = [
+        "#1f77b4", "#d62728", "#2ca02c", "#ff7f0e",
+        "#9467bd", "#17becf", "#e377c2", "#8c564b",
+        "#4169E1", "#008080"
+    ]
+
+    if not macro_growth.empty:
+        fig2 = go.Figure()
+        last_points_macro = []
+
+        # 2. 차트 선 그리기
+        for i, col in enumerate(macro_growth.columns):
+            line_color = improved_colors[i % len(improved_colors)]
+
+            fig2.add_trace(go.Scatter(
+                x=macro_growth.index,
+                y=macro_growth[col],
+                customdata=macro[col],
+                name=col,
+                mode='lines',
+                line=dict(
+                    width=1.5,
+                    color=line_color
+                ),
+                marker=dict(line=dict(width=0)),
+                hovertemplate="<b>📈 %{fullData.name}</b><br>📅 %{x|%Y-%m-%d}<br>변화율: %{y:.2f}%<br>지표값: %{customdata:.2f}<extra></extra>"
+            ))
+
+            last_points_macro.append({
                 "col": col,
-                "y": growth[col].iloc[-1],
-                "val": data_krw[col].iloc[-1],
+                "y": macro_growth[col].iloc[-1],
+                "val": macro[col].iloc[-1],
                 "color": line_color
             })
 
-        # 모든 선에 대해 확대 시 굵기 변동 방지 강제 적용
-        fig.update_traces(line=dict(width=1))
+        fig2.update_traces(line=dict(width=1.5))
 
-        # 2. 태그 로직 (기존 동일)
-        last_points.sort(key=lambda x: x['y'], reverse=True)
+        # 3. 우측 자산 태그 로직
+        last_points_macro.sort(key=lambda x: x['y'], reverse=True)
 
-        for i, p in enumerate(last_points):
+        for i, p in enumerate(last_points_macro):
             is_right = i % 2 == 0
             side_offset = 60 if is_right else -60
             x_anchor = "left" if is_right else "right"
 
-            fig.add_annotation(
-                x=growth.index[-1],
+            fig2.add_annotation(
+                x=macro_growth.index[-1],
                 y=p['y'],
-                text=f"<b>{p['col']}</b><br>{p['val']:,.0f}",
+                text=f"<b>{p['col']}</b><br>{p['val']:.2f}",
                 showarrow=True,
                 arrowhead=2,
                 arrowsize=1,
@@ -640,139 +748,85 @@ if __name__ == "__main__":
                 borderpad=4
             )
 
-        # 3. 레이아웃 설정
-        fig.update_layout(
-            template="plotly_dark",
+        # 4. 레이아웃 및 UX 옵티마이저 (연동 제어 동기화)
+        spike_mode_m = "across+toaxis" if show_spikes else ""
+        grid_color_m = "rgba(255, 255, 255, 0.05)" if show_grid else "rgba(0,0,0,0)"
+
+        fig2.update_layout(
+            paper_bgcolor="#0b111e",
+            plot_bgcolor="#0b111e",
+            font=dict(color="#9aa4b2", family="Pretendard, Inter, sans-serif"),
             dragmode="pan",
             height=650,
-            # [핵심 수정] 확대 상태 유지 및 렌더링 최적화
             uirevision='constant',
-            margin=dict(l=30, r=120, t=80, b=50),
+            margin=dict(l=40, r=130, t=30, b=40),
             showlegend=True,
             legend=dict(
-                orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1
+                orientation="h",
+                yanchor="bottom",
+                y=1.02,
+                xanchor="right",
+                x=1,
+                font=dict(size=11, color="#9aa4b2"),
+                bgcolor="rgba(0,0,0,0)"
             ),
             xaxis=dict(
-                showgrid=False,
-                range=[growth.index[0], growth.index[-1] + pd.Timedelta(days=10)]
+                showgrid=show_grid,
+                gridcolor=grid_color_m,
+                gridwidth=0.5,
+                range=[macro_growth.index, macro_growth.index[-1] + pd.Timedelta(days=15)],
+                tickfont=dict(size=11, color="#6c7a89"),
+                showspikes=show_spikes,
+                spikemode=spike_mode_m if show_spikes else None,
+                spikethickness=1,
+                spikecolor="rgba(255, 255, 255, 0.3)",
+                spikedash="dash",
+                fixedrange=False
             ),
             yaxis=dict(
                 zeroline=True,
-                zerolinecolor="rgba(255,255,255,0.2)",
-                side="left"
-            )
-        )
-
-        st.plotly_chart(fig, use_container_width=True, config={"scrollZoom": True})
-
-# =========================
-# 🌍 매크로 차트
-# =========================
-st.markdown(f"### 📊 매크로(거시) 경제 차트")
-
-improved_colors = [
-    "#1f77b4", "#d62728", "#2ca02c", "#ff7f0e",
-    "#9467bd", "#17becf", "#e377c2", "#8c564b",
-    "#4169E1", "#008080"
-]
-
-if not macro_growth.empty:
-    fig2 = go.Figure()
-    last_points_macro = []
-
-    # 1. 차트 선 그리기 및 데이터 수집
-    for i, col in enumerate(macro_growth.columns):
-        line_color = improved_colors[i % len(improved_colors)]
-
-        fig2.add_trace(go.Scatter(
-            x=macro_growth.index,
-            y=macro_growth[col],
-            customdata=macro[col],
-            name=col,
-            mode='lines',
-            # [수정] 확대 시 선 굵기 뭉침 방지를 위해 고정 픽셀 느낌으로 설정
-            line=dict(
-                width=1,
-                color=line_color
+                zerolinecolor="rgba(255,255,255,0.15)",
+                showgrid=show_grid,
+                gridcolor=grid_color_m,
+                gridwidth=0.5,
+                side="right",
+                tickfont=dict(size=11, color="#6c7a89"),
+                showspikes=show_spikes,
+                spikemode=spike_mode_m if show_spikes else None,
+                spikethickness=1,
+                spikecolor="rgba(255, 255, 255, 0.3)",
+                spikedash="dash",
+                fixedrange=False
             ),
-            hovertemplate="📅 %{x|%Y-%m-%d}<br><b>%{fullData.name}</b><br>📈 %{y:.2f}%<br>💎 %{customdata:.2f}<extra></extra>"
-        ))
-
-        last_points_macro.append({
-            "col": col,
-            "y": macro_growth[col].iloc[-1],
-            "val": macro[col].iloc[-1],
-            "color": line_color
-        })
-
-    # 모든 매크로 선에 대해 선 굵기 고정 강제 적용
-    fig2.update_traces(line=dict(width=1))
-
-    # 2. Y축 정렬 및 태그 최적화
-    last_points_macro.sort(key=lambda x: x['y'], reverse=True)
-
-    for i, p in enumerate(last_points_macro):
-        is_right = i % 2 == 0
-        side_offset = 65 if is_right else -65
-        x_anchor = "left" if is_right else "right"
-
-        fig2.add_annotation(
-            x=macro_growth.index[-1],
-            y=p['y'],
-            text=f"<b>{p['col']}</b><br>{p['val']:.2f}",
-            showarrow=True,
-            arrowhead=2,
-            arrowsize=1,
-            arrowwidth=1.5,
-            arrowcolor=p['color'],
-            ax=side_offset,
-            ay=0,
-            xanchor=x_anchor,
-            yanchor="middle",
-            font=dict(size=11, color="white"),
-            bgcolor=p['color'],
-            opacity=0.9,
-            bordercolor="white",
-            borderwidth=1,
-            borderpad=4
+            # 🎯 [버그 해결] 마우스가 닿은 단 하나의 선 위의 값만 타겟팅하도록 고정
+            hovermode="closest" if show_crosshair else False,
+            hoverdistance=50,
+            spikedistance=50
         )
 
-    # 3. 레이아웃 설정 (확대 고정 및 너비 최적화)
-    fig2.update_layout(
-        template="plotly_dark",
-        # [수정] 기본 동작을 '확대'가 아닌 '이동(Pan)'으로 설정 (모바일 드래그용)
-        dragmode="pan",
-        height=650,
-        uirevision='constant',
-        margin=dict(l=30, r=130, t=80, b=50),
-        showlegend=True,
-        legend=dict(
-            orientation="h",
-            yanchor="bottom",
-            y=1.02,
-            xanchor="right",
-            x=1,
-            font=dict(size=11)
-        ),
-        xaxis=dict(
-            showgrid=False,
-            # [추가] 고정 범위 설정이 아닌 유동적 범위를 위해 fixedrange 해제 (기본값)
-            range=[macro_growth.index, macro_growth.index[-1] + pd.Timedelta(days=15)]
-        ),
-        yaxis=dict(
-            zeroline=True,
-            zerolinecolor="rgba(255,255,255,0.2)",
-            title="수익률/변화율 (%)",
-            fixedrange=False  # Y축도 자유롭게 확대/축소 가능하게 설정
+        # 전역 모바일 터치 제스처 잠금 CSS 바인딩
+        st.markdown(
+            """
+            <style>
+            .stPlotlyChart iframe, .stPlotlyChart div {
+                touch-action: none !important;
+                -webkit-text-size-adjust: none !important;
+            }
+            </style>
+            """,
+            unsafe_allow_html=True
         )
-    )
 
-    st.plotly_chart(fig2, use_container_width=True, config={
-        "scrollZoom": True,  # 마우스 휠 및 터치패드 줌 활성화
-        "displayModeBar": True,  # 상단 도구 모음 표시 (필요시 확대/축소 리셋 가능)
-        "modeBarButtonsToRemove": ["select2d", "lasso2d"],  # 불필요한 선택 도구 제거
-        "responsive": True  # 화면 크기 변화에 대응
-    })
+        st.plotly_chart(
+            fig2,
+            use_container_width=True,
+            config={
+                "scrollZoom": True,
+                "displayModeBar": False,
+                "responsive": True,
+                "doubleClick": "reset"
+            }
+        )
 
 
     # =========================
@@ -997,25 +1051,31 @@ if not macro_growth.empty:
         sectors_list = list(growth_sector.columns)
 
         st.markdown("---")
+
+        # 상단 플로팅 버튼에서 정의한 설정값 매핑 동기화
+        spike_mode_s = "across+toaxis" if show_spikes else ""
+        grid_color_s = "rgba(255, 255, 255, 0.05)" if show_grid else "rgba(0,0,0,0)"
+
         for i in range(0, len(sectors_list), 2):
             row_cols = st.columns(2)
             for j in range(2):
                 if i + j < len(sectors_list):
                     sector_name = sectors_list[i + j]
-                    sector_color = colors[(i + j) % len(colors)]
+
+                    # RGB 추출 편의를 위해 헥사코드 보정 및 RGB 파싱 가드
+                    raw_color = colors[(i + j) % len(colors)]
+                    hex_color = raw_color.lstrip('#')
+                    r, g, b = int(hex_color[0:2], 16), int(hex_color[2:4], 16), int(hex_color[4:6], 16)
 
                     # 1. 해당 섹터 데이터 추출 및 결측치 제거
                     raw_series = growth_sector[sector_name].dropna()
 
-                    # 데이터가 2개 이상 있어야 '변화'를 그릴 수 있습니다.
                     if len(raw_series) > 1:
-                        base_val = float(raw_series.values[0])  # 첫 값을 확실하게 실수(float)로 변환
-
-                        # 기준값이 0이면 나누기가 안 되므로 아주 작은 값으로 대체하거나 스킵
+                        base_val = float(raw_series.values[0])
                         if base_val == 0:
                             base_val = 1e-9
 
-                            # 누적 수익률 계산
+                        # 누적 수익률 계산
                         cumulative_returns = (raw_series / base_val - 1) * 100
 
                         with row_cols[j]:
@@ -1023,37 +1083,80 @@ if not macro_growth.empty:
                             fig.add_trace(go.Scatter(
                                 x=cumulative_returns.index,
                                 y=cumulative_returns.values,
-                                mode="lines+markers",  # 데이터 포인트가 적을 땐 마커를 쓰는 게 확실합니다
-                                line=dict(width=3, color=sector_color),
+                                mode="lines",  # 모바일 연동 및 차트 통일감을 위해 깔끔한 선 스타일로 변경
+                                line=dict(width=2, color=raw_color),
                                 fill='tozeroy',
-                                fillcolor=f"rgba({int(sector_color[1:3], 16)}, {int(sector_color[3:5], 16)}, {int(sector_color[5:7], 16)}, 0.1)",
-                                hovertemplate="<b>%{x|%y.%m.%d}</b><br>수익률: %{y:.2f}%<extra></extra>"
+                                fillcolor=f"rgba({r}, {g}, {b}, 0.06)",  # 은은한 하단 그라데이션 광원
+                                hovertemplate=f"<b>📊 {sector_name}</b><br>📅 %{{x|%Y-%m-%d}}<br>누적수익률: %{{y:.2f}}%<extra></extra>"
                             ))
 
-                            # Y축 범위를 데이터에 맞춰 자동 조절 (일직선 방지)
+                            # Y축 범위를 데이터에 맞춰 자동 조절 (위아래 여백 0.5%)
                             y_min = cumulative_returns.min()
                             y_max = cumulative_returns.max()
-                            # 위아래로 약간의 여백(0.5%)을 강제로 줍니다.
                             y_range = [y_min - 0.5, y_max + 0.5]
 
                             fig.update_layout(
-                                title=f"📈 {sector_name} 누적 수익률 (%)",
-                                height=300,
-                                margin=dict(l=40, r=20, t=50, b=40),
-                                xaxis=dict(tickformat="%y.%m.%d", showgrid=True),
-                                yaxis=dict(
-                                    range=y_range,  # 강제 범위 설정으로 미세한 변화도 보이게 함
-                                    showgrid=True,
-                                    zeroline=True,
-                                    zerolinewidth=2,
-                                    zerolinecolor='rgba(0,0,0,0.3)',
-                                    ticksuffix="%"
+                                title=dict(
+                                    text=f"📈 {sector_name} 누적 수익률",
+                                    font=dict(size=13, color="#9aa4b2")
                                 ),
-                                plot_bgcolor="rgba(0,0,0,0)",
-                                showlegend=False
-                            )
-                            st.plotly_chart(fig, use_container_width=True, key=f"chart_cum_fix_{sector_name}")
+                                paper_bgcolor="#0b111e",
+                                plot_bgcolor="#0b111e",
+                                font=dict(color="#9aa4b2", family="Pretendard, Inter, sans-serif"),
+                                dragmode="pan",  # 하이브리드 모바일 이동 제어 이식
+                                height=300,
+                                uirevision='constant',
+                                margin=dict(l=40, r=40, t=50, b=40),
+                                showlegend=False,
 
+                                xaxis=dict(
+                                    showgrid=show_grid,
+                                    gridcolor=grid_color_s,
+                                    gridwidth=0.5,
+                                    tickfont=dict(size=10, color="#6c7a89"),
+                                    showspikes=show_spikes,
+                                    spikemode=spike_mode_s if show_spikes else None,
+                                    spikethickness=1,
+                                    spikecolor="rgba(255, 255, 255, 0.3)",
+                                    spikedash="dash",
+                                    fixedrange=False
+                                ),
+                                yaxis=dict(
+                                    range=y_range,
+                                    zeroline=True,
+                                    zerolinecolor="rgba(255,255,255,0.15)",
+                                    showgrid=show_grid,
+                                    gridcolor=grid_color_s,
+                                    gridwidth=0.5,
+                                    side="right",  # 메인 차트들과 인터페이스(Y축 우측 배치) 통일
+                                    tickfont=dict(size=10, color="#6c7a89"),
+                                    ticksuffix="%",
+                                    showspikes=show_spikes,
+                                    spikemode=spike_mode_s if show_spikes else None,
+                                    spikethickness=1,
+                                    spikecolor="rgba(255, 255, 255, 0.3)",
+                                    spikedash="dash",
+                                    fixedrange=False
+                                ),
+                                # 🎯 자석식 단일 종목 타겟팅 호버 적용
+                                hovermode="closest" if show_crosshair else False,
+                                hoverdistance=50,
+                                spikedistance=50
+                            )
+
+                            st.plotly_chart(
+                                fig,
+                                use_container_width=True,
+                                key=f"chart_cum_fix_{sector_name}",
+                                config={
+                                    "scrollZoom": True,
+                                    "displayModeBar": False,
+                                    "responsive": True,
+                                    "doubleClick": "reset"
+                                }
+                            )
+
+                            # 하단 종목 확인 익스팬더 존 (기존 기능 100% 보존)
                             with st.expander(f"🔍 {sector_name} 구성종목 확인"):
                                 if sector_name in sector_map:
                                     names = sector_map[sector_name]["names"]
@@ -1061,9 +1164,7 @@ if not macro_growth.empty:
 
                                     st.write("💡 세부내용은 종목명을 클릭하세요.")
 
-                                    # 버튼을 한 줄에 여러 개 배치하거나 리스트로 배치
                                     for name, code in zip(names, codes):
-                                        # 클릭 시 팝업 함수 실행
                                         if st.button(f"{name} ({code})", key=f"popup_{sector_name}_{code}"):
                                             show_stock_detail(code, name, data_sector_krw)
                                 else:
@@ -1917,6 +2018,5 @@ for idx, (p_type, info) in enumerate(patterns_info.items()):
 st.markdown(
     f"<div style='text-align: center; color: gray; margin-top: 50px;'>🚀 v2.1 Optimized Dashboard | {actual_valid_date.strftime('%Y-%m-%d')}</div>",
     unsafe_allow_html=True)
-
 
 
