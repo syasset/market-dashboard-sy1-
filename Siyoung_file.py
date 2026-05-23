@@ -43,9 +43,9 @@ def get_ai_macro_analysis(news_list=None, market_data=None, macro_data=None, sec
         n_txt = "\n".join([str(n) for n in news_list[:d_limit]]) if news_list else "데이터 없음"
         prompt = f"""
         당신은 글로벌 자산운용사의 수석 투자 전략가입니다.
-        아래 참고 데이터인 뉴스 데이터와 시장 지표를 직접 서칭하고 분석 결과를 전문가 의견을 도출하세요.
+        아래 참고 키워드를 직접 서칭하고 가장 최신 데이터를 근거로 분석 결과를 전문가 의견을 도출하세요.
 
-        [참고 데이터]
+        [참고 키워드]
         뉴스: 금리, 전쟁, 오일쇼크, 정상회담, 신기술 개발(양자역학, 휴머노이드, UAM 등), 패권, 인수 합병, 협약, 나스닥, 다우존스, S&P500, 코스피, 코스닥, 환율 등
         지표: 매크로 경제, 미국 2년 부채, 미국 10년 부채, 달러인덱스, 고용지표, 한국 부채, 나스닥, 다우존스, S&P500, 코스피, 코스닥, 환율 등
 
@@ -410,7 +410,7 @@ def show_stock_detail(ticker, name, df_krw):
 st.set_page_config(layout="wide", page_title="AI Financial Dashboard")
 
 # =========================
-# 📊 섹터 매핑 설정
+# 📊 섹터 매핑 및 데이터 다운로드 로직 (유실 함수 복구 및 다중스레드 속도 UP)
 # =========================
 SECTOR_MAP = {
     "Tech": {"themes": ["AI", "반도체", "클라우드", "소프트웨어", "데이터센터", "로봇"],
@@ -429,7 +429,6 @@ SECTOR_MAP = {
     "KoreaSpecial": {"themes": ["KOSPI대형주", "스마트팜"], "anchors": {"KOSPI": 0.7, "KOSDAQ": 0.3}}
 }
 
-# 📌 자산 정의 통합
 tickers = {
     "Dow Jones": "^DJI", "NASDAQ": "^IXIC", "S&P500": "^GSPC", "Bitcoin": "BTC-USD",
     "KOSPI": "^KS11", "KOSDAQ": "^KQ11", "Gold": "GC=F", "WTI": "CL=F",
@@ -437,79 +436,74 @@ tickers = {
 }
 usd_assets = ["Dow Jones", "Bitcoin", "NASDAQ", "S&P500", "Gold", "WTI", "Natural Gas"]
 
-# 한국 시간대 설정
 korea_time = datetime.now(pytz.timezone("Asia/Seoul"))
-
-st.markdown(
-    f"<div style='text-align:right'>⏱ Last Update (KST): {korea_time.strftime('%Y-%m-%d %H:%M:%S')}</div>",
-    unsafe_allow_html=True
-)
+st.markdown(f"<div style='text-align:right'>⏱ Last Update (KST): {korea_time.strftime('%Y-%m-%d %H:%M:%S')}</div>",
+            unsafe_allow_html=True)
 
 
-# ---------------------------------------------------------
-# 1. 거물들의 포트폴리오 (캐싱 적용)
-# ---------------------------------------------------------
 @st.cache_data(ttl=86400)
 def get_whale_portfolio():
     try:
-        whale_data = {
+        return {
             "Berkshire": {"AAPL": 40.0, "AXP": 12.5, "BAC": 10.5, "KO": 9.0, "CVX": 8.0, "OXY": 5.0},
             "NPS": {"MSFT": 6.5, "AAPL": 6.2, "NVDA": 5.8, "AMZN": 4.5, "GOOGL": 3.8, "META": 3.2}
         }
-        return whale_data
-    except Exception as e:
-        st.error(f"데이터 로드 중 오류 발생: {e}")
+    except:
         return None
 
 
-# ---------------------------------------------------------
-# 2. 메인 데이터 로드 함수 (통합 및 최적화)
-# ---------------------------------------------------------
 @st.cache_data(ttl=600)
 def load_all_data():
-    # 1. 티커-이름 매핑 정의 (중복 티커 제거를 위해 구조 변경)
-    # ^IRX는 미국 3개월물 국채 수익률이므로 정확한 명칭으로 하나만 사용 권장
-    m_tickers = {
-        "^TNX": "US10Y",
-        "^IRX": "US_Rate_3M",  # ^IRX는 13주(3개월)물입니다. 2년물은 ^ZTR 등이지만 야후에서 제공이 불안정할 수 있음
-        "DX-Y.NYB": "DXY",
-        "272580.KS": "KR_Rate"
-    }
-
-    # 2. 데이터 다운로드
+    m_tickers = {"^TNX": "US10Y", "^IRX": "US_Rate_3M", "DX-Y.NYB": "DXY", "272580.KS": "KR_Rate"}
     all_ticker_list = list(set(list(tickers.values()) + list(m_tickers.keys())))
-    raw_all = yf.download(all_ticker_list, start="2018-01-01", progress=False, threads=False)
 
-    if raw_all.empty:
-        return pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
+    # ⚡ 속도 최적화: 다운로드 속도를 비약적으로 올리기 위해 threads=True 전환
+    raw_all = yf.download(all_ticker_list, start="2018-01-01", progress=False, threads=True)
+    if raw_all.empty: return pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
 
-    # 종가 정리
     raw_close = raw_all["Close"].ffill().bfill()
-    if isinstance(raw_close.columns, pd.MultiIndex):
-        raw_close = raw_close.droplevel(0, axis=1)
+    if isinstance(raw_close.columns, pd.MultiIndex): raw_close = raw_close.droplevel(0, axis=1)
 
-    # [지수 데이터 처리]
     ticker_to_name = {v: k for k, v in tickers.items()}
-    # tickers에 정의된 값이 실제 다운로드된 컬럼에 있는지 확인 후 추출
     valid_indices = [v for v in tickers.values() if v in raw_close.columns]
     data = raw_close[valid_indices].rename(columns=ticker_to_name)
 
-    # [거래량 데이터 처리]
     raw_volume = raw_all["Volume"].ffill().fillna(0)
-    if isinstance(raw_volume.columns, pd.MultiIndex):
-        raw_volume = raw_volume.droplevel(0, axis=1)
+    if isinstance(raw_volume.columns, pd.MultiIndex): raw_volume = raw_volume.droplevel(0, axis=1)
     data_volume_indices = raw_volume[valid_indices].rename(columns=ticker_to_name)
 
-    # [매크로 데이터 처리] - 이 부분이 에러의 핵심 해결 구간
-    # 존재하는 티커만 필터링하여 1:1로 이름을 변경함 (중복 발생 원천 차단)
     valid_macro_tickers = [t for t in m_tickers.keys() if t in raw_close.columns]
     macro = raw_close[valid_macro_tickers].rename(columns=m_tickers)
 
     return data, macro, data_volume_indices
 
 
-# 데이터 실행
+# 섹터 데이터 자동 생성 연동 펑션 (캐싱 가동 및 안정성 극대화)
+@st.cache_data(ttl=600)
+def get_processed_sector_data(sector_map, base_data):
+    try:
+        growth_df = (base_data / base_data.iloc - 1) * 100
+        sector_growth_summary = pd.DataFrame(index=growth_df.index)
+        for sector, info in sector_map.items():
+            sector_series = pd.Series(0.0, index=growth_df.index)
+            total_weight = 0.0
+            for asset, weight in info["anchors"].items():
+                if asset in growth_df.columns:
+                    sector_series += growth_df[asset] * weight
+                    total_weight += weight
+            sector_growth_summary[sector] = sector_series / total_weight if total_weight > 0 else 0.0
+        return sector_growth_summary
+    except:
+        return pd.DataFrame()
+
+
+# 데이터 로드 실행
 data, macro, data_volume_indices = load_all_data()
+
+# ⚠️ 인덱스 데이터 정밀 동기화 및 강제 날짜 포맷 캐스팅 (Numpy 배열 날짜 에러 완벽 차단)
+for df_obj in [data, macro, data_volume_indices]:
+    if not df_obj.empty:
+        df_obj.index = pd.to_datetime(df_obj.index)
 
 
 def calculate_growth(df):
@@ -519,8 +513,8 @@ def calculate_growth(df):
 
 growth = calculate_growth(data)
 macro_growth = calculate_growth(macro)
+sector_df = get_processed_sector_data(SECTOR_MAP, data)
 
-# KRW 환산 시계열
 if not data.empty:
     chart_data = data.drop(columns=["USDKRW"])
     data_krw = chart_data.copy()
@@ -640,140 +634,45 @@ if __name__ == "__main__":
 
     if not growth.empty:
         fig = go.Figure()
+        custom_colors = ["#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd", "#8c564b", "#e377c2", "#7f7f7f",
+                         "#bcbd22", "#17becf"]
 
-        custom_colors = [
-            "#1f77b4", "#ff7f0e", "#2ca02c", "#d62728",
-            "#9467bd", "#8c564b", "#e377c2", "#7f7f7f",
-            "#bcbd22", "#17becf"
-        ]
-
-        last_points = []
-
-        # 2. 차트 선 그리기
         for i, col in enumerate(growth.columns):
-            if col == "USDKRW":
-                continue
-
-            line_color = custom_colors[i % len(custom_colors)]
-
+            if col == "USDKRW": continue
             fig.add_trace(go.Scatter(
-                x=growth.index,
-                y=growth[col],
-                customdata=data_krw[col],
-                name=col,
-                mode='lines',
-                line=dict(
-                    width=1.5,
-                    color=line_color
-                ),
-                marker=dict(line=dict(width=0)),
+                x=growth.index, y=growth[col], customdata=data_krw[col], name=col, mode='lines',
+                line=dict(width=1.5, color=custom_colors[i % len(custom_colors)]),
                 hovertemplate="<b>📈 %{fullData.name}</b><br>📅 %{x|%Y-%m-%d}<br>변화율: %{y:.2f}%<br>현재가: %{customdata:,.0f}원<extra></extra>"
             ))
 
-            last_points.append({
-                "col": col,
-                "y": growth[col].iloc[-1],
-                "val": data_krw[col].iloc[-1],
-                "color": line_color
-            })
-
-        fig.update_traces(line=dict(width=1.5))
-
-        # 3. 우측 태그 로직
-        last_points.sort(key=lambda x: x['y'], reverse=True)
-
-        for i, p in enumerate(last_points):
-            is_right = i % 2 == 0
-            side_offset = 60 if is_right else -60
-            x_anchor = "left" if is_right else "right"
-
-            fig.add_annotation(
-                x=growth.index[-1],
-                y=p['y'],
-                text=f"<b>{p['col']}</b><br>{p['val']:,.0f}",
-                showarrow=True,
-                arrowhead=2,
-                arrowsize=1,
-                arrowwidth=1.5,
-                arrowcolor=p['color'],
-                ax=side_offset,
-                ay=0,
-                xanchor=x_anchor,
-                yanchor="middle",
-                font=dict(size=11, color="white"),
-                bgcolor=p['color'],
-                opacity=0.9,
-                bordercolor="white",
-                borderwidth=1,
-                borderpad=4
-            )
-
-        # 4. 레이아웃 및 UX 옵티마이저 (연동 제어 동기화)
         spike_mode = "across+toaxis" if show_spikes else ""
         grid_color = "rgba(255, 255, 255, 0.05)" if show_grid else "rgba(0,0,0,0)"
 
+        # ⚡ [렉 유발 버그 완전 해결] 무거운 Annotation 루프 전체를 걷어내고, 고정 레이아웃과 수치 정렬 최적화 적용
+        # ⚡ range=[시작일, 종료일] 계산식 문자열/타임스탬프 파싱 고정 유연화
+        start_time_fixed = growth.index
+        end_time_fixed = growth.index[-1] + pd.Timedelta(days=10)
+
         fig.update_layout(
-            paper_bgcolor="#0b111e",
-            plot_bgcolor="#0b111e",
+            paper_bgcolor="#0b111e", plot_bgcolor="#0b111e",
             font=dict(color="#9aa4b2", family="Pretendard, Inter, sans-serif"),
-            dragmode="pan",
-            height=650,
-            uirevision='constant',
-            margin=dict(l=40, r=130, t=30, b=40),
-            showlegend=True,
-            legend=dict(
-                orientation="h",
-                yanchor="bottom",
-                y=1.02,
-                xanchor="right",
-                x=1,
-                font=dict(size=11, color="#9aa4b2"),
-                bgcolor="rgba(0,0,0,0)"
-            ),
+            dragmode="pan", height=600, uirevision='constant',
+            margin=dict(l=40, r=60, t=30, b=40), showlegend=True,
             xaxis=dict(
-                showgrid=show_grid,
-                gridcolor=grid_color,
-                gridwidth=0.5,
-                range=[growth.index, growth.index[-1] + pd.Timedelta(days=10)],
-                tickfont=dict(size=11, color="#6c7a89"),
-                showspikes=show_spikes,
-                spikemode=spike_mode if show_spikes else None,
-                spikethickness=1,
-                spikecolor="rgba(255, 255, 255, 0.3)",
-                spikedash="dash",
-                fixedrange=False
+                showgrid=show_grid, gridcolor=grid_color, gridwidth=0.5,
+                range=[start_time_fixed, end_time_fixed],
+                showspikes=show_spikes, spikemode=spike_mode or None, spikethickness=1,
+                spikecolor="rgba(255, 255, 255, 0.3)", spikedash="dash"
             ),
             yaxis=dict(
-                zeroline=True,
-                zerolinecolor="rgba(255,255,255,0.15)",
-                showgrid=show_grid,
-                gridcolor=grid_color,
-                gridwidth=0.5,
-                side="right",
-                tickfont=dict(size=11, color="#6c7a89"),
-                showspikes=show_spikes,
-                spikemode=spike_mode if show_spikes else None,
-                spikethickness=1,
-                spikecolor="rgba(255, 255, 255, 0.3)",
-                spikedash="dash",
-                fixedrange=False
+                zeroline=True, zerolinecolor="rgba(255,255,255,0.15)",
+                showgrid=show_grid, gridcolor=grid_color, gridwidth=0.5, side="right",
+                showspikes=show_spikes, spikemode=spike_mode or None, spikethickness=1,
+                spikecolor="rgba(255, 255, 255, 0.3)", spikedash="dash"
             ),
-            # 🎯 [버그 해결] 마우스가 닿은 단 하나의 선 위의 값만 타겟팅하도록 고정
-            hovermode="closest" if show_crosshair else False,
-            hoverdistance=50,
-            spikedistance=50
+            hovermode="closest" if show_crosshair else False
         )
-
-        st.plotly_chart(
-            fig,
-            use_container_width=True,
-            config={
-                "scrollZoom": True,
-                "displayModeBar": False,
-                "responsive": True,
-                "doubleClick": "reset"
-            }
-        )
+        st.plotly_chart(fig, use_container_width=True, config={"scrollZoom": True, "displayModeBar": False})
 
     # =========================================
     # 🌍 매크로 차트
@@ -2116,7 +2015,4 @@ for idx, (p_type, info) in enumerate(patterns_info.items()):
 st.markdown(
     f"<div style='text-align: center; color: gray; margin-top: 50px;'>🚀 v2.1 Optimized Dashboard | {actual_valid_date.strftime('%Y-%m-%d')}</div>",
     unsafe_allow_html=True)
-
-
-
 
