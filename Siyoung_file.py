@@ -44,18 +44,21 @@ def get_ai_macro_analysis(news_list=None, market_data=None, macro_data=None, sec
         prompt = f"""
         당신은 글로벌 자산운용사의 수석 투자 전략가입니다.
         아래 참고 키워드를 직접 서칭하고 가장 최신 데이터를 근거로 분석 결과를 전문가 의견을 도출하세요.
-        그리고 모든 결과는 데이터를 기반해 분석을 하며, 모르는 정보에 대해서는 허위로 기재하면 안됩니다.
+        그리고 모든 결과는 데이터를 기반해 분석을 하며, 모르는 정보에 대해서는 허위로 기재해서는 안됩니다.
 
         [참고 키워드: 키워드는 항상 가장 최신화 뉴스 및 지표만을 활용할 것]
         뉴스: 금리, 전쟁, 오일쇼크, 정상회담, 신기술 개발(양자역학, 휴머노이드, UAM 등), 패권, 인수 합병, 협약, 나스닥, 다우존스, S&P500, 코스피, 코스닥, 환율 등
         지표: 매크로 경제, 미국 2년 부채, 미국 10년 부채, 달러인덱스, 고용지표, 한국 부채, 나스닥, 다우존스, S&P500, 코스피, 코스닥, 환율 등
-
+        * 키워드는 단순히 읽어라는 게 아니고 실제 영향을 주는 요인을 분석할 때 써주세요. 또한 위에서 거론한 키워드 외에도 참고할 사항은 활용하세요.
+        ** 항상 최신일자 자료로 브리핑 할 것(한번씩 출력된 결과물은 1~2년 전 자료를 근거로 응답됨)
+        *** 사람들의 기대감도 분명 시장의 변동성에 중요한 요소임. 예로들면 전쟁이나 정상회담 때 시장 상승, 감소 등의 사례가 있음
+        
         [필수 포함 내용]
         1. 갑작스런 지수 등락 시 뉴스 및 지표의 키워드 등을 활용한 원인을 분석하고 대답해주세요.(실제 급등락 발생 시)
         2. 핵심 시황 진단: 현재 시장의 가장 큰 테마와 리스크 요인을 분석하세요.
         3. 🎯 유망 종목 추천: 글로벌 시총 TOP 50 및 국내 우량주 기준 현재 상황에서 가장 수익성이 기대되는 5종목을 각각 선정하고 선정 이유를 설명하세요.
         4. 전략 요약: 향후 투자 포지션에 대한 3줄 요약 가이드를 제시하세요.
-        5. 국민연금, 버크셔헤서웨이 같은 고래들의 보유종목 및 비중 지표(차트로 보여주면 더 좋음)
+        5. 국민연금, 버크셔헤서웨이 등 고래들의 보유종목 및 비중 지표 포트폴리오
 
         """
 
@@ -532,28 +535,28 @@ else:
 if __name__ == "__main__":
     st.write("")
 
-    with st.container():
-        st.markdown("---")
-        st.markdown("<h2 style='text-align: center;'>🐳 거물들의 포트폴리오 (Whale Tracking)</h2>", unsafe_allow_html=True)
-        whales = get_whale_portfolio()
+   # with st.container():
+   #     st.markdown("---")
+   #     st.markdown("<h2 style='text-align: center;'>🐳 거물들의 포트폴리오 (Whale Tracking)</h2>", unsafe_allow_html=True)
+   #     whales = get_whale_portfolio()
 
-        if whales:
-            col_w1, col_w2 = st.columns(2)
-            with col_w1:
-                st.markdown("<h4 style='text-align: center;'>🇺🇸 Berkshire Hathaway</h4>", unsafe_allow_html=True)
-                df_bh = pd.DataFrame(list(whales["Berkshire"].items()), columns=["Ticker", "Weight"])
-                fig_bh = px.pie(df_bh, values="Weight", names="Ticker", hole=0.4,
-                                color_discrete_sequence=px.colors.sequential.RdBu)
-                st.plotly_chart(fig_bh, use_container_width=True, key="bh_final_chart")
-                st.dataframe(df_bh.set_index("Ticker").T, use_container_width=True)
+   #     if whales:
+   #         col_w1, col_w2 = st.columns(2)
+   #         with col_w1:
+   #             st.markdown("<h4 style='text-align: center;'>🇺🇸 Berkshire Hathaway</h4>", unsafe_allow_html=True)
+   #             df_bh = pd.DataFrame(list(whales["Berkshire"].items()), columns=["Ticker", "Weight"])
+   #             fig_bh = px.pie(df_bh, values="Weight", names="Ticker", hole=0.4,
+   #                             color_discrete_sequence=px.colors.sequential.RdBu)
+   #             st.plotly_chart(fig_bh, use_container_width=True, key="bh_final_chart")
+   #             st.dataframe(df_bh.set_index("Ticker").T, use_container_width=True)
 
-            with col_w2:
-                st.markdown("<h4 style='text-align: center;'>🇰🇷 National Pension Service</h4>", unsafe_allow_html=True)
-                df_nps = pd.DataFrame(list(whales["NPS"].items()), columns=["Ticker", "Weight"])
-                fig_nps = px.pie(df_nps, values="Weight", names="Ticker", hole=0.4,
-                                 color_discrete_sequence=px.colors.sequential.Mint)
-                st.plotly_chart(fig_nps, use_container_width=True, key="nps_final_chart")
-                st.dataframe(df_nps.set_index("Ticker").T, use_container_width=True)
+   #         with col_w2:
+   #             st.markdown("<h4 style='text-align: center;'>🇰🇷 National Pension Service</h4>", unsafe_allow_html=True)
+   #             df_nps = pd.DataFrame(list(whales["NPS"].items()), columns=["Ticker", "Weight"])
+   #             fig_nps = px.pie(df_nps, values="Weight", names="Ticker", hole=0.4,
+   #                              color_discrete_sequence=px.colors.sequential.Mint)
+   #             st.plotly_chart(fig_nps, use_container_width=True, key="nps_final_chart")
+   #             st.dataframe(df_nps.set_index("Ticker").T, use_container_width=True)
 
     run_sidebar_logic(news_list, growth, macro_growth, sector_df)
 
@@ -2102,4 +2105,3 @@ for idx, (p_type, info) in enumerate(patterns_info.items()):
 st.markdown(
     f"<div style='text-align: center; color: gray; margin-top: 50px;'>🚀 v2.1 Optimized Dashboard | {actual_valid_date.strftime('%Y-%m-%d')}</div>",
     unsafe_allow_html=True)
-
