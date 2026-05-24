@@ -52,7 +52,7 @@ def get_ai_macro_analysis(news_list=None, market_data=None, macro_data=None, sec
         * 키워드는 단순히 읽어라는 게 아니고 실제 영향을 주는 요인을 분석할 때 써주세요. 또한 위에서 거론한 키워드 외에도 참고할 사항은 활용하세요.
         ** 항상 최신일자 자료로 브리핑 할 것(한번씩 출력된 결과물은 1~2년 전 자료를 근거로 응답됨)
         *** 사람들의 기대감도 분명 시장의 변동성에 중요한 요소임. 예로들면 전쟁이나 정상회담 때 시장 상승, 감소 등의 사례가 있음
-        
+
         [필수 포함 내용]
         1. 갑작스런 지수 등락 시 뉴스 및 지표의 키워드 등을 활용한 원인을 분석하고 대답해주세요.(실제 급등락 발생 시)
         2. 핵심 시황 진단: 현재 시장의 가장 큰 테마와 리스크 요인을 분석하세요.
@@ -535,28 +535,28 @@ else:
 if __name__ == "__main__":
     st.write("")
 
-   # with st.container():
-   #     st.markdown("---")
-   #     st.markdown("<h2 style='text-align: center;'>🐳 거물들의 포트폴리오 (Whale Tracking)</h2>", unsafe_allow_html=True)
-   #     whales = get_whale_portfolio()
+    # with st.container():
+    #     st.markdown("---")
+    #     st.markdown("<h2 style='text-align: center;'>🐳 거물들의 포트폴리오 (Whale Tracking)</h2>", unsafe_allow_html=True)
+    #     whales = get_whale_portfolio()
 
-   #     if whales:
-   #         col_w1, col_w2 = st.columns(2)
-   #         with col_w1:
-   #             st.markdown("<h4 style='text-align: center;'>🇺🇸 Berkshire Hathaway</h4>", unsafe_allow_html=True)
-   #             df_bh = pd.DataFrame(list(whales["Berkshire"].items()), columns=["Ticker", "Weight"])
-   #             fig_bh = px.pie(df_bh, values="Weight", names="Ticker", hole=0.4,
-   #                             color_discrete_sequence=px.colors.sequential.RdBu)
-   #             st.plotly_chart(fig_bh, use_container_width=True, key="bh_final_chart")
-   #             st.dataframe(df_bh.set_index("Ticker").T, use_container_width=True)
+    #     if whales:
+    #         col_w1, col_w2 = st.columns(2)
+    #         with col_w1:
+    #             st.markdown("<h4 style='text-align: center;'>🇺🇸 Berkshire Hathaway</h4>", unsafe_allow_html=True)
+    #             df_bh = pd.DataFrame(list(whales["Berkshire"].items()), columns=["Ticker", "Weight"])
+    #             fig_bh = px.pie(df_bh, values="Weight", names="Ticker", hole=0.4,
+    #                             color_discrete_sequence=px.colors.sequential.RdBu)
+    #             st.plotly_chart(fig_bh, use_container_width=True, key="bh_final_chart")
+    #             st.dataframe(df_bh.set_index("Ticker").T, use_container_width=True)
 
-   #         with col_w2:
-   #             st.markdown("<h4 style='text-align: center;'>🇰🇷 National Pension Service</h4>", unsafe_allow_html=True)
-   #             df_nps = pd.DataFrame(list(whales["NPS"].items()), columns=["Ticker", "Weight"])
-   #             fig_nps = px.pie(df_nps, values="Weight", names="Ticker", hole=0.4,
-   #                              color_discrete_sequence=px.colors.sequential.Mint)
-   #             st.plotly_chart(fig_nps, use_container_width=True, key="nps_final_chart")
-   #             st.dataframe(df_nps.set_index("Ticker").T, use_container_width=True)
+    #         with col_w2:
+    #             st.markdown("<h4 style='text-align: center;'>🇰🇷 National Pension Service</h4>", unsafe_allow_html=True)
+    #             df_nps = pd.DataFrame(list(whales["NPS"].items()), columns=["Ticker", "Weight"])
+    #             fig_nps = px.pie(df_nps, values="Weight", names="Ticker", hole=0.4,
+    #                              color_discrete_sequence=px.colors.sequential.Mint)
+    #             st.plotly_chart(fig_nps, use_container_width=True, key="nps_final_chart")
+    #             st.dataframe(df_nps.set_index("Ticker").T, use_container_width=True)
 
     run_sidebar_logic(news_list, growth, macro_growth, sector_df)
 
@@ -1111,7 +1111,7 @@ if __name__ == "__main__":
         spike_mode_s = "across+toaxis" if show_spikes else ""
         grid_color_s = "rgba(255, 255, 255, 0.05)" if show_grid else "rgba(0,0,0,0)"
 
-        #st.write("현재 데이터프레임 컬럼 목록:", list(data_sector_krw.columns))
+        # st.write("현재 데이터프레임 컬럼 목록:", list(data_sector_krw.columns))
 
         for i in range(0, len(sectors_list), 2):
             row_cols = st.columns(2)
@@ -1456,73 +1456,145 @@ if __name__ == "__main__":
         return 'color: #f1c40f; font-weight: bold'
 
 
-    # =========================================================
-    # 🔗 상관관계
-    # =========================================================
-    def render_correlation_analysis(df):
-        st.markdown("### 🔗 자산 간 상관관계 분석 (최근 120일)")
-        st.caption("주요 지수, 원자재, 환율 등 거시 경제 지표 간의 동행성을 분석합니다.")
+    # ====================================================================
+    # 🎛️ [1단계] 파일 최상단 전역 공간에 팝업 함수 배치 (순서 에러 방지)
+    # ====================================================================
+    @st.dialog("🔗 종합 상관관계 매트릭스 분석 (최근 120일)", width="large")
+    def show_correlation_popup(df_asset):
+        """메인 화면 버튼 클릭 시 오버레이되는 프리미엄 고성능 좌/우 분할 매핑 팝업창"""
+        st.caption(
+            "거시 경제 자산군과 포트폴리오 섹터 간의 동행성을 좌우 탭 구조로 정밀 분석합니다."
+        )
 
-        # 1. 최근 120일 데이터 기준 상관계수 계산
-        # 가격 지수 자체보다 변동성(pct_change) 기반 분석이 매크로 흐름 파악에 더 정확합니다.
-        corr = df.tail(120).pct_change().corr()
+        tab_left, tab_right = st.tabs(
+            ["📊 1. 거시 자산 간 상관관계", "🏢 2. 포트폴리오 섹터 간 상관관계"]
+        )
 
-        # 2. 레이아웃 분할 (히트맵 | AI 통계 분석)
-        col_left, col_right = st.columns([1.2, 0.8])
+        # ----------------------------------------------------------------
+        # [왼쪽 탭] 1번: 자산 간 상관관계 분석
+        # ----------------------------------------------------------------
+        with tab_left:
+            df_asset_filtered = df_asset.drop(columns=["USDKRW"], errors="ignore")
 
-        with col_left:
-            fig_corr = px.imshow(
-                corr,
-                text_auto=".2f",
-                aspect="auto",
-                color_continuous_scale="RdBu_r",
-                zmin=-1, zmax=1,
-                title="Asset Correlation Heatmap"
-            )
-            fig_corr.update_layout(height=500, margin=dict(t=50, b=10, l=10, r=10))
-            st.plotly_chart(fig_corr, use_container_width=True)
+            if not df_asset_filtered.empty and len(df_asset_filtered) > 1:
+                corr_asset = df_asset_filtered.tail(120).pct_change().corr()
+                col_l1, col_l2 = st.columns([1.2, 0.8])
 
-        with col_right:
-            st.markdown("#### 🤖 자산 흐름 분석 리포트")
+                with col_l1:
+                    fig_asset = px.imshow(
+                        corr_asset,
+                        text_auto=".2f",
+                        aspect="auto",
+                        color_continuous_scale="RdBu_r",
+                        zmin=-1,
+                        zmax=1,
+                        title="Asset Correlation Heatmap",
+                    )
+                    fig_asset.update_layout(
+                        height=450,
+                        margin=dict(t=40, b=10, l=10, r=10),
+                        paper_bgcolor="rgba(0,0,0,0)",
+                        plot_bgcolor="rgba(0,0,0,0)",
+                    )
+                    st.plotly_chart(fig_asset, use_container_width=True)
 
-            # 상관계수 행렬 가공 (중복 제거)
-            mask = np.triu(np.ones(corr.shape), k=1).astype(bool)
-            sol = corr.where(mask).unstack().dropna().sort_values()
+                with col_l2:
+                    st.markdown("#### 🤖 자산 흐름 분석 리포트")
+                    mask = np.triu(np.ones(corr_asset.shape), k=1).astype(bool)
+                    sol = corr_asset.where(mask).unstack().dropna().sort_values()
 
-            # 상위/하위 관계 추출
-            decoupling_pairs = sol.head(2)  # 가장 반대로 움직이는 2개
-            coupling_pairs = sol.tail(2)  # 가장 같이 움직이는 2개
+                    decoupling_pairs = sol.head(2)
+                    coupling_pairs = sol.tail(2)
 
-            # --- [섹션 1: 커플링(동행)] ---
-            st.markdown("##### ✅ 강한 동행 (커플링)")
-            for (a1, a2), val in coupling_pairs.iloc[::-1].items():
-                st.success(f"**{a1} ↔ {a2}** (상관계수: {val:.2f})")
-            st.caption("두 자산은 현재 같은 방향으로 움직이는 경향이 매우 강합니다.")
+                    st.markdown("##### ✅ 강한 동행 (커플링)")
+                    for (a1, a2), val in coupling_pairs.iloc[::-1].items():
+                        st.success(f"**{a1} ↔ {a2}** (상관계수: {val:.2f})")
 
-            st.write("")  # 간격 조절
+                    st.write("")
 
-            # --- [섹션 2: 디커플링(반등)] ---
-            st.markdown("##### 🔄 강한 반동 (디커플링)")
-            for (a1, a2), val in decoupling_pairs.items():
-                # 음수일 경우 강조
-                box_style = "border-left: 5px solid #E74C3C; background-color: rgba(231, 76, 60, 0.1);" if val < 0 else "border-left: 5px solid #F1C40F;"
-                st.markdown(f"""
-                    <div style="{box_style} padding: 10px; border-radius: 5px; margin-bottom: 5px;">
-                        <small style="color:gray;">상관도: {val:.2f}</small><br>
-                        <b style="font-size:15px;">{a1} ↔ {a2}</b>
-                    </div>
-                """, unsafe_allow_html=True)
+                    st.markdown("##### 🔄 강한 반동 (디커플링)")
+                    for (a1, a2), val in decoupling_pairs.items():
+                        box_style = (
+                            "border-left: 5px solid #E74C3C; background-color: rgba(231, 76, 60, 0.08);"
+                            if val < 0
+                            else "border-left: 5px solid #F1C40F; background-color: rgba(241, 196, 15, 0.05);"
+                        )
+                        st.markdown(
+                            f"""
+                            <div style="{box_style} padding: 10px; border-radius: 5px; margin-bottom: 5px;">
+                                <small style="color:gray;">상관도: {val:.2f}</small><br>
+                                <b style="font-size:14px;">{a1} ↔ {a2}</b>
+                            </div>
+                        """,
+                            unsafe_allow_html=True,
+                        )
+            else:
+                st.warning("자산 상관관계 분석을 위한 데이터가 충분하지 않습니다.")
 
-            st.info("💡 상관관계가 낮은 자산들을 조합하면 포트폴리오의 전체 변동성을 낮출 수 있습니다.")
+        # ----------------------------------------------------------------
+        # [오른쪽 탭] 2번: 섹터 간 상관관계 분석
+        # ----------------------------------------------------------------
+        with tab_right:
+            # 데이터가 늦게 로드되는 특성을 완벽히 방어하기 위한 실시간 로드 아키텍처
+            df_sec = globals().get("growth_sector")
 
+            if df_sec is not None and not df_sec.empty and len(df_sec) > 1:
+                corr_sec = df_sec.tail(120).pct_change().corr()
+                col_r1, col_r2 = st.columns([1.2, 0.8])
 
-    # 실행 호출부
-    render_correlation_analysis(data.drop(columns=["USDKRW"]))
+                with col_r1:
+                    fig_sec = px.imshow(
+                        corr_sec,
+                        text_auto=".2f",
+                        aspect="auto",
+                        color_continuous_scale="RdBu_r",
+                        zmin=-1,
+                        zmax=1,
+                        title="Sector Correlation Heatmap",
+                    )
+                    fig_sec.update_layout(
+                        height=450,
+                        margin=dict(t=40, b=10, l=10, r=10),
+                        paper_bgcolor="rgba(0,0,0,0)",
+                        plot_bgcolor="rgba(0,0,0,0)",
+                    )
+                    st.plotly_chart(fig_sec, use_container_width=True)
+
+                with col_r2:
+                    st.markdown("#### 🔄 서로 반대로 움직이는 섹터")
+                    mask = np.triu(np.ones(corr_sec.shape), k=1).astype(bool)
+                    sol = corr_sec.where(mask)
+                    sorted_corr = sol.unstack().dropna().sort_values()
+
+                    low_corr_pairs = sorted_corr.head(3)
+
+                    if not low_corr_pairs.empty:
+                        for (s1, s2), val in low_corr_pairs.items():
+                            box_color = "#E74C3C" if val < 0 else "#F1C40F"
+                            st.markdown(
+                                f"""
+                                <div style="background-color:rgba(231, 76, 60, 0.08); border-left: 5px solid {box_color}; padding: 10px; border-radius: 5px; margin-bottom: 10px;">
+                                    <small style="color:gray;">상관도: {val:.2f}</small><br>
+                                    <b style="font-size:14px;">{s1} ↔ {s2}</b>
+                                </div>
+                            """,
+                                unsafe_allow_html=True,
+                            )
+                        st.info(
+                            "💡 위 섹터들은 리스크 분산(헤징) 포트폴리오 구성에 유리합니다."
+                        )
+                    else:
+                        st.write("현재 뚜렷한 역상관 관계가 포착되지 않았습니다.")
+            else:
+                # 순서 문제로 직전에 아직 안 불러와졌을 경우를 위한 가이드 텍스트
+                st.info(
+                    "💡 섹터 상관관계 정보는 '하단 섹터별 데이터' 로드가 완전히 끝난 후 활성화됩니다. 잠시 후 탭을 다시 눌러주세요."
+                )
+
 
     # =========================================================
     # 📈 [보강] 도미넌스 & 실시간 상세 리포트
     # =========================================================
-    import plotly.express as px
     import plotly.graph_objects as go
 
 
@@ -1621,7 +1693,7 @@ if __name__ == "__main__":
 
             gauge = go.Figure(go.Indicator(
                 mode="gauge+number", value=score,
-                title={'text': "Market Sentiment", 'font': {'size': 18}},
+                title={'text': "시장 공포탐욕지수", 'font': {'size': 18}},
                 gauge={
                     'axis': {'range': [-3, 3]},  # 전체 범위: -3부터 3까지
                     'bar': {'color': "black"},
@@ -1679,77 +1751,17 @@ if __name__ == "__main__":
             else:
                 st.info("선택된 섹터의 종목 데이터를 찾을 수 없습니다.")
 
+            st.write('<div style="margin-top: 20px;"></div>', unsafe_allow_html=True)
+            if st.button("🔗 종합 상관관계 팝업", key="btn_v81_pure_right_side", use_container_width=True):
+                data_var = globals().get('data')
+                if data_var is not None:
+                    show_correlation_popup(data_var)
+                else:
+                    st.error("상관관계 분석을 위한 원본 'data'를 찾을 수 없습니다.")
 
     # 함수 실행
     render_v81_verification_mode()
 
-
-    # =========================================================
-    # 🔗 [독립 실행] 섹터 간 상관관계 및 역상관 분석
-    # =========================================================
-    def render_sector_specific_correlation():
-        # 1. 전역 변수에서 섹터 데이터(growth_sector) 가져오기
-        df_sec = globals().get('growth_sector')
-
-        if df_sec is None or df_sec.empty:
-            st.warning("상관관계 분석을 위한 'growth_sector' 데이터가 로드되지 않았습니다.")
-            return
-
-        st.markdown("---")
-        st.markdown("### 🔗 섹터 간 상관관계 분석 (최근 120일)")
-        st.caption("섹터별 수익률 움직임의 유사성을 분석합니다. -1에 가까울수록 반대로 움직입니다.")
-
-        # 2. 최근 120일 데이터 기준 상관계수 계산
-        # 가격 지수보다 변동성(pct_change) 기준 분석이 더 정확합니다.
-        corr = df_sec.tail(120).pct_change().corr()
-
-        # 3. 레이아웃 분할 (히트맵 | 역상관 리스트)
-        col_a, col_b = st.columns([1.2, 0.8])
-
-        with col_a:
-            fig_corr = px.imshow(
-                corr,
-                text_auto=".2f",
-                aspect="auto",
-                color_continuous_scale="RdBu_r",
-                zmin=-1, zmax=1,
-                title="Sector Correlation Heatmap"
-            )
-            fig_corr.update_layout(height=500, margin=dict(t=50, b=10, l=10, r=10))
-            st.plotly_chart(fig_corr, use_container_width=True)
-
-        with col_b:
-            st.markdown("#### 🔄 서로 반대로 움직이는 섹터")
-
-            # 상관계수 행렬에서 중복 제거 및 자기 자신(1.0) 제외
-            mask = np.triu(np.ones(corr.shape), k=1).astype(bool)
-            sol = corr.where(mask)
-            # 상관계수가 낮은 순(역상관)으로 정렬
-            sorted_corr = sol.unstack().dropna().sort_values()
-
-            # 하위 3개 커플 추출
-            low_corr_pairs = sorted_corr.head(3)
-
-            if not low_corr_pairs.empty:
-                for (s1, s2), val in low_corr_pairs.items():
-                    # 역상관 정도에 따른 색상 강조
-                    box_color = "#E74C3C" if val < 0 else "#F1C40F"
-                    st.markdown(f"""
-                        <div style="background-color:rgba(231, 76, 60, 0.1); border-left: 5px solid {box_color}; padding: 10px; border-radius: 5px; margin-bottom: 10px;">
-                            <small style="color:gray;">상관도: {val:.2f}</small><br>
-                            <b style="font-size:16px;">{s1} ↔ {s2}</b>
-                        </div>
-                    """, unsafe_allow_html=True)
-
-                st.info("💡 위 섹터들은 한쪽이 오를 때 다른 쪽은 내리는 경향이 있어 리스크 분산에 유리합니다.")
-            else:
-                st.write("현재 뚜렷한 역상관 관계가 포착되지 않았습니다.")
-
-
-    # ---------------------------------------------------------
-    # 호출부: 기존 함수들 밖에서 실행하세요
-    # ---------------------------------------------------------
-    render_sector_specific_correlation()
 
     # =========================
     # 📈 4. AI 분석 리포트 & 기상도
