@@ -41,24 +41,32 @@ def get_ai_macro_analysis(news_list=None, market_data=None, macro_data=None, sec
 
         d_limit = limit if limit else 12
         n_txt = "\n".join([str(n) for n in news_list[:d_limit]]) if news_list else "데이터 없음"
+        current_date_str = datetime.datetime.now().strftime("%Y년 %m월 %d일")
+
         prompt = f"""
         당신은 글로벌 자산운용사의 수석 투자 전략가입니다.
-        아래 참고 키워드를 직접 서칭하고 가장 최신 데이터를 근거로 분석 결과를 전문가 의견을 도출하세요.
-        그리고 모든 결과는 데이터를 기반해 분석을 하며, 모르는 정보에 대해서는 허위로 기재해서는 안됩니다.
+        반드시 아래의 지침을 칼같이 준수하여 분석 리포트를 작성하세요.
 
-        [참고 키워드: 키워드는 항상 가장 최신화 뉴스 및 지표만을 활용할 것]
-        뉴스: 금리, 전쟁, 오일쇼크, 정상회담, 신기술 개발(양자역학, 휴머노이드, UAM 등), 패권, 인수 합병, 협약, 나스닥, 다우존스, S&P500, 코스피, 코스닥, 환율 등
-        지표: 매크로 경제, 미국 2년 부채, 미국 10년 부채, 달러인덱스, 고용지표, 한국 부채, 나스닥, 다우존스, S&P500, 코스피, 코스닥, 환율 등
-        * 키워드는 단순히 읽어라는 게 아니고 실제 영향을 주는 요인을 분석할 때 써주세요. 또한 위에서 거론한 키워드 외에도 참고할 사항은 활용하세요.
-        ** 항상 최신일자 자료로 브리핑 할 것(한번씩 출력된 결과물은 1~2년 전 자료를 근거로 응답됨)
-        *** 사람들의 기대감도 분명 시장의 변동성에 중요한 요소임. 예로들면 전쟁이나 정상회담 때 시장 상승, 감소 등의 사례가 있음
+        [🚨 최신성 및 날짜 제한 절대 원칙]
+        - 오늘 날짜는 **{current_date_str}** 입니다.
+        - 반드시 오늘({current_date_str})을 기준으로 구글 실시간 웹 검색(Search)을 수행하여 가장 최신(24~48시간 이내)의 뉴스, 환율, 지표만을 기반으로 분석하세요. 
+        - 과거(2024년 등)의 고정된 학습 데이터나 유통기한이 지난 환율/지수를 가져오는 것은 치명적인 정보 오류로 간주합니다.
+        - 확실한 실시간 데이터나 수치가 없는 항목은 "현재 데이터 확인 불가"로 명시하고, 절대로 가상의 수치나 허위 정보를 기재(Hallucination)하지 마세요. 모든 결과는 실제 데이터 수치를 기반으로 분석해야 합니다.
+
+        [📊 시장 심리 및 대중 관심도(Sentiment) 반영 조건]
+        - 전쟁, 정상회담, 패권 경쟁 등 시장의 기대감과 불안감을 자극하는 이벤트 분석 시, 단순히 사건의 발생 여부만 적지 마세요.
+        - 해당 이슈가 '여러 언론사에서 집중적으로 다뤄지고 있는지', 'SNS 및 커뮤니티에서 리태그/인용되며 대중의 관심도가 극에 달해 있는지' 등 시장 참여자들의 심리적 과열 상태를 함께 진단하세요. (예: 대중의 불안감 전이율, 언론 노출 빈도 기반의 심리 변화 등)
+
+        [참고 키워드: 실제 시장 영향 분석 및 수치 도출용]
+        - 뉴스: 금리, 전쟁, 오일쇼크, 정상회담, 신기술 개발(양자역학, 휴머노이드, UAM 등), 패권, 인수 합병, 협약, 나스닥, 다우존스, S&P500, 코스피, 코스닥, 환율 등
+        - 지표: 매크로 경제, 미국 2년/10년 국채 금리, 달러인덱스(DXY), 고용지표, 한국 부채, 주요 지수 종가, 실시간 환율 등
 
         [필수 포함 내용]
-        1. 갑작스런 지수 등락 시 뉴스 및 지표의 키워드 등을 활용한 원인을 분석하고 대답해주세요.(실제 급등락 발생 시)
-        2. 핵심 시황 진단: 현재 시장의 가장 큰 테마와 리스크 요인을 분석하세요.
-        3. 🎯 유망 종목 추천: 글로벌 시총 TOP 50 및 국내 우량주 기준 현재 상황에서 가장 수익성이 기대되는 5종목을 각각 선정하고 선정 이유를 설명하세요.
-        4. 전략 요약: 향후 투자 포지션에 대한 3줄 요약 가이드를 제시하세요.
-        5. 국민연금, 버크셔헤서웨이 등 고래들의 보유종목 및 비중 지표 포트폴리오
+        1. 💥 최근 급등락 원인 분석: 최근 발생한 갑작스러운 지수 등락에 대해 뉴스 및 지표 키워드를 매핑하여 원인을 데이터와 함께 정확히 대답해주세요.
+        2. 🔬 핵심 시황 진단: 현재({current_date_str} 기준) 시장의 가장 큰 테마와 리스크 요인을 분석하세요. (언론사 노출도 및 대중 리태그 심리 분석 포함)
+        3. 🎯 유망 종목 추천: 글로벌 시총 TOP 50 및 국내 우량주 기준 현재 상황에서 가장 수익성이 기대되는 5종목을 각각 선정하고, 명확한 정량적 데이터(최신 실적, 지표, 수혜 규모)를 근거로 선정 이유를 설명하세요.
+        4. 🐋 고래들의 포트폴리오 최신 동향: 국민연금, 버크셔 헤서웨이 등 주요 기관/고래들의 가장 최근 공시(13F 등) 기준 보유 종목 및 비중 지표 동향을 요약하세요.
+        5. 📝 전략 요약: 향후 투자 포지션에 대한 3줄 요약 가이드를 제시하세요.
 
         """
 
@@ -632,52 +640,174 @@ if __name__ == "__main__":
     show_spikes = st.session_state.shared_chart_show_spikes
 
     # =========================================
-    # 📊 자산 차트
+    # 📊 지수 차트
     # =========================================
     st.markdown("## 🌍📊 지수, 섹터별 지표")
     st.markdown(f"### 📈 지수차트")
 
     if not growth.empty:
         fig = go.Figure()
-        custom_colors = ["#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd", "#8c564b", "#e377c2", "#7f7f7f",
-                         "#bcbd22", "#17becf"]
+        custom_colors = [
+            "#1f77b4",
+            "#ff7f0e",
+            "#2ca02c",
+            "#d62728",
+            "#9467bd",
+            "#8c564b",
+            "#e377c2",
+            "#7f7f7f",
+            "#bcbd22",
+            "#17becf",
+        ]
 
+        last_points_index = []
+
+        # 1. 차트 선 그리기 및 우측 태그용 데이터 수집
         for i, col in enumerate(growth.columns):
-            if col == "USDKRW": continue
-            fig.add_trace(go.Scatter(
-                x=growth.index, y=growth[col], customdata=data_krw[col], name=col, mode='lines',
-                line=dict(width=1.5, color=custom_colors[i % len(custom_colors)]),
-                hovertemplate="<b>📈 %{fullData.name}</b><br>📅 %{x|%Y-%m-%d}<br>변화율: %{y:.2f}%<br>현재가: %{customdata:,.0f}원<extra></extra>"
-            ))
+            if col == "USDKRW":
+                continue
+            line_color = custom_colors[i % len(custom_colors)]
 
+            fig.add_trace(
+                go.Scatter(
+                    x=growth.index,
+                    y=growth[col],
+                    customdata=data_krw[col],
+                    name=col,
+                    mode="lines",
+                    line=dict(width=1.5, color=line_color),
+                    marker=dict(line=dict(width=0)),
+                    hovertemplate="<b>📈 %{fullData.name}</b><br>📅 %{x|%Y-%m-%d}<br>변화율: %{y:.2f}%<br>현재가: %{customdata:,.0f}원<extra></extra>",
+                )
+            )
+
+            # 매크로 레이아웃 규격에 맞게 마지막 포인트 수집
+            last_points_index.append(
+                {
+                    "col": col,
+                    "y": growth[col].iloc[-1],
+                    "val": data_krw[col].iloc[-1],
+                    "color": line_color,
+                }
+            )
+
+        fig.update_traces(line=dict(width=1.5))
+
+        # 2. [매크로 이식] 우측 자산 태그 생성 및 정렬 로직
+        last_points_index.sort(key=lambda x: x["y"], reverse=True)
+
+        for i, p in enumerate(last_points_index):
+            is_right = i % 2 == 0
+            side_offset = 45 if is_right else -45  # 화살표 길이를 살짝 줄여 여백 확보
+            x_anchor = "left" if is_right else "right"
+
+            fig.add_annotation(
+                x=growth.index[-1],
+                y=p['y'],
+                text=f"<b>{p['col']}</b><br>{p['val']:,.0f}원",  # 데이터에 맞게 값 포맷팅 (원화)
+                showarrow=True,
+                arrowhead=2,
+                arrowsize=1,
+                arrowwidth=1.1,  # 화살표 두께를 살짝 슬림하게
+                arrowcolor=p['color'],
+                ax=side_offset,
+                ay=0,
+                xanchor=x_anchor,
+                yanchor="middle",
+
+                # --- 🎯 가독성 및 깨짐 방지 핵심 설정 ---
+                font=dict(
+                    size=9.5,  # 글자 크기를 기존 11에서 9.5로 축소 (가독성 유지 맥스치)
+                    color="white",
+                    family="Pretendard, sans-serif"
+                ),
+                bgcolor=p['color'],
+                opacity=0.85,  # 살짝 투명도를 주어 겹쳐도 뒤가 보이게 조절
+                bordercolor="rgba(255,255,255,0.7)",  # 테두리 선을 살짝 부드럽게
+                borderwidth=1,
+                borderpad=2.5,  # 글자 박스 내부 여백을 줄여서 박스 전체 크기를 축소 (글자 안 깨짐)
+            )
+
+        # 3. [매크로 이식] 레이아웃 및 UX 옵티마이저 동기화
         spike_mode = "across+toaxis" if show_spikes else ""
         grid_color = "rgba(255, 255, 255, 0.05)" if show_grid else "rgba(0,0,0,0)"
 
-        # ⚡ [렉 유발 버그 완전 해결] 무거운 Annotation 루프 전체를 걷어내고, 고정 레이아웃과 수치 정렬 최적화 적용
-        # ⚡ range=[시작일, 종료일] 계산식 문자열/타임스탬프 파싱 고정 유연화
-        start_time_fixed = growth.index
-        end_time_fixed = growth.index[-1] + pd.Timedelta(days=10)
-
         fig.update_layout(
-            paper_bgcolor="#0b111e", plot_bgcolor="#0b111e",
+            paper_bgcolor="#0b111e",
+            plot_bgcolor="#0b111e",
             font=dict(color="#9aa4b2", family="Pretendard, Inter, sans-serif"),
-            dragmode="pan", height=400, uirevision='constant',
-            margin=dict(l=40, r=60, t=30, b=40), showlegend=True,
+            dragmode="pan",
+            height=400,
+            uirevision="constant",
+            margin=dict(
+                l=40, r=80, t=30, b=40
+            ),  # 우측 자산 태그 공간 확보를 위해 r=130으로 확장
+            showlegend=True,
+            legend=dict(
+                orientation="h",
+                yanchor="bottom",
+                y=1.02,
+                xanchor="right",
+                x=1,
+                font=dict(size=11, color="#9aa4b2"),
+                bgcolor="rgba(0,0,0,0)",
+            ),
             xaxis=dict(
-                showgrid=show_grid, gridcolor=grid_color, gridwidth=0.5,
-                range=[start_time_fixed, end_time_fixed],
-                showspikes=show_spikes, spikemode=spike_mode or None, spikethickness=1,
-                spikecolor="rgba(255, 255, 255, 0.3)", spikedash="dash"
+                showgrid=show_grid,
+                gridcolor=grid_color,
+                gridwidth=0.5,
+                range=[growth.index, growth.index[-1] + pd.Timedelta(days=15)],
+                tickfont=dict(size=11, color="#6c7a89"),
+                showspikes=show_spikes,
+                spikemode=spike_mode if show_spikes else None,
+                spikethickness=1,
+                spikecolor="rgba(255, 255, 255, 0.3)",
+                spikedash="dash",
+                fixedrange=False,
             ),
             yaxis=dict(
-                zeroline=True, zerolinecolor="rgba(255,255,255,0.15)",
-                showgrid=show_grid, gridcolor=grid_color, gridwidth=0.5, side="right",
-                showspikes=show_spikes, spikemode=spike_mode or None, spikethickness=1,
-                spikecolor="rgba(255, 255, 255, 0.3)", spikedash="dash"
+                zeroline=True,
+                zerolinecolor="rgba(255,255,255,0.15)",
+                showgrid=show_grid,
+                gridcolor=grid_color,
+                gridwidth=0.5,
+                side="right",
+                tickfont=dict(size=11, color="#6c7a89"),
+                showspikes=show_spikes,
+                spikemode=spike_mode if show_spikes else None,
+                spikethickness=1,
+                spikecolor="rgba(255, 255, 255, 0.3)",
+                spikedash="dash",
+                fixedrange=False,
             ),
-            hovermode="closest" if show_crosshair else False
+            hovermode="closest" if show_crosshair else False,
+            hoverdistance=50,
+            spikedistance=50,
         )
-        st.plotly_chart(fig, use_container_width=True, config={"scrollZoom": True, "displayModeBar": False})
+
+        # 전역 모바일 터치 제스처 잠금 CSS 바인딩
+        st.markdown(
+            """
+            <style>
+            .stPlotlyChart iframe, .stPlotlyChart div {
+                touch-action: none !important;
+                -webkit-text-size-adjust: none !important;
+            }
+            </style>
+            """,
+            unsafe_allow_html=True,
+        )
+
+        st.plotly_chart(
+            fig,
+            use_container_width=True,
+            config={
+                "scrollZoom": True,
+                "displayModeBar": False,
+                "responsive": True,
+                "doubleClick": "reset",
+            },
+        )
 
     # =========================================
     # 🌍 매크로 차트
@@ -726,28 +856,33 @@ if __name__ == "__main__":
 
         for i, p in enumerate(last_points_macro):
             is_right = i % 2 == 0
-            side_offset = 60 if is_right else -60
+            side_offset = 45 if is_right else -45  # 화살표 길이를 줄여 여백 확보
             x_anchor = "left" if is_right else "right"
 
             fig2.add_annotation(
                 x=macro_growth.index[-1],
-                y=p['y'],
-                text=f"<b>{p['col']}</b><br>{p['val']:.2f}",
+                y=p["y"],
+                text=f"<b>{p['col']}</b><br>{p['val']:.2f}",  # 원래의 소수점 2자리 포맷 유지
                 showarrow=True,
                 arrowhead=2,
                 arrowsize=1,
-                arrowwidth=1.5,
-                arrowcolor=p['color'],
+                arrowwidth=1.1,  # 화살표 두께 슬림화
+                arrowcolor=p["color"],
                 ax=side_offset,
                 ay=0,
                 xanchor=x_anchor,
                 yanchor="middle",
-                font=dict(size=11, color="white"),
-                bgcolor=p['color'],
-                opacity=0.9,
-                bordercolor="white",
+                # --- 🎯 가독성 및 깨짐 방지 동일 세팅 ---
+                font=dict(
+                    size=9.5,  # 글자 크기 9.5로 축소
+                    color="white",
+                    family="Pretendard, sans-serif",
+                ),
+                bgcolor=p["color"],
+                opacity=0.85,  # 겹침 대비 투명도 적용
+                bordercolor="rgba(255,255,255,0.7)",  # 테두리 부드럽게
                 borderwidth=1,
-                borderpad=4
+                borderpad=2.5,  # 내부 패딩 축소로 박스 크기 슬림화 (글자 깨짐 방지)
             )
 
         # 4. 레이아웃 및 UX 옵티마이저 (연동 제어 동기화)
@@ -761,7 +896,7 @@ if __name__ == "__main__":
             dragmode="pan",
             height=400,
             uirevision='constant',
-            margin=dict(l=40, r=130, t=30, b=40),
+            margin=dict(l=40, r=80, t=30, b=40),
             showlegend=True,
             legend=dict(
                 orientation="h",
