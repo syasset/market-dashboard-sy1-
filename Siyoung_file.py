@@ -2338,4 +2338,3 @@ for idx, (p_type, info) in enumerate(patterns_info.items()):
 st.markdown(
     f"<div style='text-align: center; color: gray; margin-top: 50px;'>🚀 v2.1 Optimized Dashboard | {actual_valid_date.strftime('%Y-%m-%d')}</div>",
     unsafe_allow_html=True)
-
