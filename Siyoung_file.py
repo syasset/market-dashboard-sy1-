@@ -18,6 +18,7 @@ import numpy as np
 from streamlit_autorefresh import st_autorefresh
 import json
 from google import genai
+import datetime as dt_module
 
 if 'sector_df' not in locals():
     sector_df = pd.DataFrame()
@@ -26,11 +27,26 @@ if 'news_list' not in locals():
 
 st_autorefresh(interval=3 * 60 * 1000, key="data_refresh")
 
+# =========================================
+# 🛡️ 스트림릿 세션 상태(Session State) 안전 초기화 가드
+# =========================================
+if "stored_report" not in st.session_state:
+    st.session_state.stored_report = None
+if "api_status" not in st.session_state:
+    st.session_state.api_status = "IDLE"
+if "last_analysis_time" not in st.session_state:
+    st.session_state.last_analysis_time = None
+if "retry_wait_time" not in st.session_state:
+    st.session_state.retry_wait_time = 0
+if "last_error_time" not in st.session_state:
+    st.session_state.last_error_time = None
+if "error_detail" not in st.session_state:
+    st.session_state.error_detail = ""
 
-# ==========================
-# 제미나이 분석 체계 기획
-# ==========================
-# 1. 제미나이 엔진 (문자열을 절대로 리턴하지 않음 -> 사이드바 출력 원천 봉쇄)
+
+# =========================================
+#  글로벌 매크로 AI 분석 엔진
+# =========================================
 def get_ai_macro_analysis(news_list=None, market_data=None, macro_data=None, sector_df=None, limit=None):
     try:
         # [교훈] 사용자 정답 경로 및 v1 명시 고정
@@ -41,27 +57,38 @@ def get_ai_macro_analysis(news_list=None, market_data=None, macro_data=None, sec
 
         d_limit = limit if limit else 12
         n_txt = "\n".join([str(n) for n in news_list[:d_limit]]) if news_list else "데이터 없음"
-        current_date_str = datetime.datetime.now().strftime("%Y년 %m월 %d일")
+
+        # 로컬 환경 모듈 참조 충돌 방지용 가드
+        now = dt_module.datetime.now()
+        weekday_list = list(("월", "화", "수", "목", "금", "토", "일"))
+        weekday_str = weekday_list[now.weekday()]
+
+        current_date_str = now.strftime("%Y년 %m월 %d일")
+        current_time_str = now.strftime(f"%Y년 %m월 %d일 ({weekday_str}요일) %H시 %M분")
+
+        # 분석 시점을 안전하게 세션에 할당
+        st.session_state.last_analysis_time = current_time_str
 
         prompt = f"""
         당신은 글로벌 자산운용사의 수석 투자 전략가입니다.
-        반드시 아래의 지침을 칼같이 준수하여 분석 리포트를 작성하세요. 리포트의 서문에는 분석 후 도출한 한국(서울)기준 일시를 기재하세요.
+        반드시 아래의 지침을 칼같이 준수하여 분석 리포트를 작성하세요. 
+        리포트의 최상단 서문(제목 바로 아래)에는 분석 완료 시점인 한국(서울) 기준 일시 **{current_time_str}**를 반드시 명시하여 시작하세요.
 
-        [🚨 최신성 및 날짜 제한 절대 원칙]
-        - 오늘 날짜는 **{current_date_str}** 입니다.
-        - 반드시 오늘({current_date_str})을 기준으로 구글 실시간 웹 검색(Search)을 수행하여 가장 최신(24~48시간 이내)의 뉴스, 환율, 지표만을 기반으로 분석하세요. 
+        🚨 [최신성 및 날짜 제한 절대 원칙]
+        - 오늘 날짜와 시간은 **{current_time_str}** 입니다.
+        - 반드시 이 시점을 기준으로 구글 실시간 웹 검색(Search)을 수행하여 가장 최신(24~48시간 이내)의 뉴스, 환율, 지표만을 기반으로 분석하세요. 
         - 과거(2024년 등)의 고정된 학습 데이터나 유통기한이 지난 환율/지수를 가져오는 것은 치명적인 정보 오류로 간주합니다.
         - 확실한 실시간 데이터나 수치가 없는 항목은 "현재 데이터 확인 불가"로 명시하고, 절대로 가상의 수치나 허위 정보를 기재(Hallucination)하지 마세요. 모든 결과는 실제 데이터 수치를 기반으로 분석해야 합니다.
 
-        [📊 시장 심리 및 대중 관심도(Sentiment) 반영 조건]
+        📊 [시장 심리 및 대중 관심도(Sentiment) 반영 조건]
         - 전쟁, 정상회담, 패권 경쟁 등 시장의 기대감과 불안감을 자극하는 이벤트 분석 시, 단순히 사건의 발생 여부만 적지 마세요.
         - 해당 이슈가 '여러 언론사에서 집중적으로 다뤄지고 있는지', 'SNS 및 커뮤니티에서 리태그/인용되며 대중의 관심도가 극에 달해 있는지' 등 시장 참여자들의 심리적 과열 상태를 함께 진단하세요. (예: 대중의 불안감 전이율, 언론 노출 빈도 기반의 심리 변화 등)
 
-        [참고 키워드: 실제 시장 영향 분석 및 수치 도출용]
-        - 뉴스: 금리, 전쟁, 오일쇼크, 정상회담, 신기술 개발(양자역학, 휴머노이드, UAM 등), IPO, 패권, 인수 합병, 협약, 나스닥, 다우존스, S&P500, 코스피, 코스닥, 환율 등
+        🔎 [참고 키워드: 실제 시장 영향 분석 및 수치 도출용]
+        - 뉴스: 금리, 전쟁, 오일쇼크, 정상회담, 신기술 개발(양자역학, 휴머노이드, UAM 등), IPO, 패권, 인수 합병, 협약, 우주, 나스닥, 다우존스, S&P500, 코스피, 코스닥, 환율 등
         - 지표: 매크로 경제, 미국 2년/10년 국채 금리, 달러인덱스(DXY), 고용지표, 한국 부채, 주요 지수 종가, 실시간 환율 등
 
-        [필수 포함 내용]
+        📌 [필수 포함 내용]
         1. 💥 최근 급등락 원인 분석: 최근 발생한 갑작스러운 지수 등락에 대해 뉴스 및 지표 키워드를 매핑하여 원인을 데이터와 함께 정확히 대답해주세요.
         2. 🔬 핵심 시황 진단: 현재({current_date_str} 기준) 시장의 가장 큰 테마와 리스크 요인을 분석하세요. (언론사 노출도 및 대중 리태그 심리 분석 포함)
         3. 🎯 유망 종목 추천: 글로벌 시총 TOP 50 및 국내 우량주 기준 현재 상황에서 가장 수익성이 기대되는 5종목을 각각 선정하고, 명확한 정량적 데이터(최신 실적, 지표, 수혜 규모)를 근거로 선정 이유를 설명하세요.
@@ -83,7 +110,6 @@ def get_ai_macro_analysis(news_list=None, market_data=None, macro_data=None, sec
 
     except Exception as e:
         err_msg = str(e)
-        # 429 과부하 에러일 경우 대기 초 추출
         if "429" in err_msg:
             retry_seconds = 60
             match = re.search(r"retry in ([\d\.]+)s", err_msg)
@@ -98,15 +124,21 @@ def get_ai_macro_analysis(news_list=None, market_data=None, macro_data=None, sec
             st.session_state.error_detail = err_msg
 
 
-# ✅ 기존 시스템 간의 완벽한 호환성 연결
+# 호환성 별칭 연동
 get_global_news_ai = get_ai_macro_analysis
 
 
-# 2. 결과 및 에러 출력 공용 팝업창 (사이드바를 더럽히지 않는 유일한 소통 창구)
+# 팝업 윈도우 인터페이스
 @st.dialog("📊 AI 종합 마켓 분석 시스템", width="large")
 def show_report_popup(title, content):
     st.subheader(title)
+
+    if st.session_state.last_analysis_time:
+        st.caption(f"🕒 **데이터 분석 기준 시점:** {st.session_state.last_analysis_time}")
+
+    st.divider()
     st.markdown(content)
+
     if st.button("닫기"):
         st.rerun()
 
@@ -2306,3 +2338,4 @@ for idx, (p_type, info) in enumerate(patterns_info.items()):
 st.markdown(
     f"<div style='text-align: center; color: gray; margin-top: 50px;'>🚀 v2.1 Optimized Dashboard | {actual_valid_date.strftime('%Y-%m-%d')}</div>",
     unsafe_allow_html=True)
+
