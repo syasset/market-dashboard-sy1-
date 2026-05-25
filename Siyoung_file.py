@@ -161,11 +161,11 @@ get_global_news_ai = get_ai_macro_analysis
 def show_report_popup(title, content):
     st.subheader(title)
 
-    #if st.session_state.last_analysis_time:
-    #    st.caption(f"🕒 **데이터 분석 기준 시점:** {st.session_state.last_analysis_time}")
+    if st.session_state.last_analysis_time:
+        st.caption(f"🕒 **데이터 분석 기준 시점:** {st.session_state.last_analysis_time}")
 
-    #st.divider()
-    #st.markdown(content)
+    st.divider()
+    st.markdown(content)
 
     if st.button("닫기"):
         st.rerun()
