@@ -19,6 +19,7 @@ from streamlit_autorefresh import st_autorefresh
 import json
 from google import genai
 import datetime as dt_module
+import os
 
 if 'sector_df' not in locals():
     sector_df = pd.DataFrame()
@@ -27,8 +28,11 @@ if 'news_list' not in locals():
 
 st_autorefresh(interval=3 * 60 * 1000, key="data_refresh")
 
+# F5 새로고침 시 세션 증발을 방어하기 위한 로컬 캐시 파일 경로
+CACHE_FILE = "gemini_report_cache.json"
+
 # =========================================
-# 🛡️ 스트림릿 세션 상태(Session State) 안전 초기화 가드
+# 🛡️ 스트림릿 세션 상태(Session State) 안전 초기화 및 로컬 복원 가드
 # =========================================
 if "stored_report" not in st.session_state:
     st.session_state.stored_report = None
@@ -43,9 +47,20 @@ if "last_error_time" not in st.session_state:
 if "error_detail" not in st.session_state:
     st.session_state.error_detail = ""
 
+# 🔥 [F5 새로고침 방어] 세션이 비어있을 때 로컬 파일에 저장된 캐시가 있다면 자동으로 불러옵니다.
+if st.session_state.stored_report is None and os.path.exists(CACHE_FILE):
+    try:
+        with open(CACHE_FILE, "r", encoding="utf-8") as f:
+            cache_data = json.load(f)
+            st.session_state.stored_report = cache_data.get("stored_report")
+            st.session_state.last_analysis_time = cache_data.get("last_analysis_time")
+            st.session_state.api_status = cache_data.get("api_status", "SUCCESS")
+    except Exception:
+        pass
+
 
 # =========================================
-#  글로벌 매크로 AI 분석 엔진
+#  글로벌 매크로 AI 분석 엔진 (타임존 보정 및 파일 저장 기능 추가)
 # =========================================
 def get_ai_macro_analysis(news_list=None, market_data=None, macro_data=None, sector_df=None, limit=None):
     try:
@@ -58,8 +73,10 @@ def get_ai_macro_analysis(news_list=None, market_data=None, macro_data=None, sec
         d_limit = limit if limit else 12
         n_txt = "\n".join([str(n) for n in news_list[:d_limit]]) if news_list else "데이터 없음"
 
-        # 로컬 환경 모듈 참조 충돌 방지용 가드
-        now = dt_module.datetime.now()
+        # 🕒 [시간 오차 보완] KST(Asia/Seoul) 타임존을 명시적으로 주입하여 9시간 시차 왜곡 해결
+        seoul_tz = pytz.timezone("Asia/Seoul")
+        now = dt_module.datetime.now(seoul_tz)
+
         weekday_list = list(("월", "화", "수", "목", "금", "토", "일"))
         weekday_str = weekday_list[now.weekday()]
 
@@ -105,6 +122,17 @@ def get_ai_macro_analysis(news_list=None, market_data=None, macro_data=None, sec
         if response and response.text:
             st.session_state.stored_report = response.text
             st.session_state.api_status = "SUCCESS"
+
+            # 💾 [F5 새로고침 백업용] 성공적으로 불러온 리포트 데이터를 파일에 기록
+            try:
+                with open(CACHE_FILE, "w", encoding="utf-8") as f:
+                    json.dump({
+                        "stored_report": st.session_state.stored_report,
+                        "last_analysis_time": st.session_state.last_analysis_time,
+                        "api_status": "SUCCESS"
+                    }, f, ensure_ascii=False, indent=4)
+            except Exception:
+                pass
         else:
             st.session_state.api_status = "EMPTY"
 
