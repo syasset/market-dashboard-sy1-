@@ -26,14 +26,25 @@ if 'sector_df' not in locals():
 if 'news_list' not in locals():
     news_list = []
 
+# F5 새로고침 시 세션 증발을 방어하기 위한 로컬 캐시 파일 경로
+CACHE_FILE = "gemini_report_cache.json"
+
+# ---------------------------------------------------------
+# 🛡️ 세션 상태 초기화 및 뉴스 메모리 브릿지 개설
+# ---------------------------------------------------------
+if 'sector_df' not in locals():
+    sector_df = pd.DataFrame()
+
+# 💡 핵심: 하단의 뉴스 크롤링 결과가 상단 제미나이로 유기적으로 배달되도록 세션 상태로 관리합니다.
+if 'news_list' not in st.session_state:
+    st.session_state.news_list = []
+
 st_autorefresh(interval=3 * 60 * 1000, key="data_refresh")
 
 # F5 새로고침 시 세션 증발을 방어하기 위한 로컬 캐시 파일 경로
 CACHE_FILE = "gemini_report_cache.json"
 
-# =========================================
-# 🛡️ 스트림릿 세션 상태(Session State) 안전 초기화 및 로컬 복원 가드
-# =========================================
+# 스트림릿 세션 상태(Session State) 안전 초기화 및 로컬 복원 가드
 if "stored_report" not in st.session_state:
     st.session_state.stored_report = None
 if "api_status" not in st.session_state:
@@ -47,20 +58,22 @@ if "last_error_time" not in st.session_state:
 if "error_detail" not in st.session_state:
     st.session_state.error_detail = ""
 
-# 🔥 [F5 새로고침 방어] 세션이 비어있을 때 로컬 파일에 저장된 캐시가 있다면 자동으로 불러옵니다.
+# [팝업 먹통 완치 가드] F5 새로고침 시 파일 캐시를 읽어 기존 대시보드 상태값까지 완벽 복원
 if st.session_state.stored_report is None and os.path.exists(CACHE_FILE):
     try:
         with open(CACHE_FILE, "r", encoding="utf-8") as f:
             cache_data = json.load(f)
-            st.session_state.stored_report = cache_data.get("stored_report")
-            st.session_state.last_analysis_time = cache_data.get("last_analysis_time")
-            st.session_state.api_status = cache_data.get("api_status", "SUCCESS")
+            if cache_data.get("stored_report"):
+                st.session_state.stored_report = cache_data.get("stored_report")
+                st.session_state.last_analysis_time = cache_data.get("last_analysis_time")
+                st.session_state.api_status = "SUCCESS"
+                st.session_state.error_detail = ""
     except Exception:
         pass
 
 
 # =========================================
-#  글로벌 매크로 AI 분석 엔진 (타임존 보정 및 파일 저장 기능 추가)
+#  글로벌 매크로 AI 분석 엔진 (세션 뉴스 데이터 실시간 하이브리드 반영)
 # =========================================
 def get_ai_macro_analysis(news_list=None, market_data=None, macro_data=None, sector_df=None, limit=None):
     try:
@@ -70,10 +83,11 @@ def get_ai_macro_analysis(news_list=None, market_data=None, macro_data=None, sec
             http_options={'api_version': 'v1'}
         )
 
+        # 💡 [순서 제약 돌파]: 인자로 받은 news_list가 비어있다면, 세션 브릿지에 저장된 하단의 최신 크롤링 데이터를 동적으로 낚아챕니다.
+        target_news = news_list if news_list else st.session_state.news_list
         d_limit = limit if limit else 12
-        n_txt = "\n".join([str(n) for n in news_list[:d_limit]]) if news_list else "데이터 없음"
+        n_txt = "\n".join([str(n) for n in target_news[:d_limit]]) if target_news else "현재 크롤링된 대시보드 뉴스 데이터 없음 (구글 실시간 검색 의존)"
 
-        # 🕒 [시간 오차 보완] KST(Asia/Seoul) 타임존을 명시적으로 주입하여 9시간 시차 왜곡 해결
         seoul_tz = pytz.timezone("Asia/Seoul")
         now = dt_module.datetime.now(seoul_tz)
 
@@ -83,9 +97,9 @@ def get_ai_macro_analysis(news_list=None, market_data=None, macro_data=None, sec
         current_date_str = now.strftime("%Y년 %m월 %d일")
         current_time_str = now.strftime(f"%Y년 %m월 %d일 ({weekday_str}요일) %H시 %M분")
 
-        # 분석 시점을 안전하게 세션에 할당
         st.session_state.last_analysis_time = current_time_str
 
+        # 프롬프트에 대시보드 자체 크롤링 뉴스 데이터 묶음(n_txt)을 완벽 배달 주입합니다.
         prompt = f"""
         당신은 글로벌 자산운용사의 수석 투자 전략가입니다.
         반드시 아래의 지침을 칼같이 준수하여 분석 리포트를 작성하세요. 
@@ -93,13 +107,16 @@ def get_ai_macro_analysis(news_list=None, market_data=None, macro_data=None, sec
 
         🚨 [최신성 및 날짜 제한 절대 원칙]
         - 오늘 날짜와 시간은 **{current_time_str}** 입니다.
-        - 반드시 이 시점을 기준으로 구글 실시간 웹 검색(Search)을 수행하여 가장 최신(24~48시간 이내)의 뉴스, 환율, 지표만을 기반으로 분석하세요. 
-        - 과거(2024년 등)의 고정된 학습 데이터나 유통기한이 지난 환율/지수를 가져오는 것은 치명적인 정보 오류로 간주합니다.
-        - 확실한 실시간 데이터나 수치가 없는 항목은 "현재 데이터 확인 불가"로 명시하고, 절대로 가상의 수치나 허위 정보를 기재(Hallucination)하지 마세요. 모든 결과는 실제 데이터 수치를 기반으로 분석해야 합니다.
+        - 반드시 이 시점을 기준으로 구글 실시간 웹 검색(Search)을 수행하고, 아래 제공되는 대시보드 수집 뉴스를 상호 교차 검증하여 가장 최신(24~48시간 이내)의 시황을 기반으로 분석하세요.
+        - 특히 최근 시장 변동성의 핵심인 '트럼프-시진핑 정상회담', '스페이스X IPO' 등 매크로 빅이벤트와 관련 뉴스가 수집되어 있다면 이를 최우선으로 리포트에 반영하세요.
+        - 과거 고정 데이터나 유통기한이 지난 수치를 기재하는 것은 치명적인 오류입니다.
+
+        📊 [대시보드 자체 시스템 수집 최신 경제/시황 뉴스 백엔드 데이터]
+        {n_txt}
 
         📊 [시장 심리 및 대중 관심도(Sentiment) 반영 조건]
         - 전쟁, 정상회담, 패권 경쟁 등 시장의 기대감과 불안감을 자극하는 이벤트 분석 시, 단순히 사건의 발생 여부만 적지 마세요.
-        - 해당 이슈가 '여러 언론사에서 집중적으로 다뤄지고 있는지', 'SNS 및 커뮤니티에서 리태그/인용되며 대중의 관심도가 극에 달해 있는지' 등 시장 참여자들의 심리적 과열 상태를 함께 진단하세요. (예: 대중의 불안감 전이율, 언론 노출 빈도 기반의 심리 변화 등)
+        - 해당 이슈가 '여러 언론사에서 집중적으로 다뤄지고 있는지', 'SNS 및 커뮤니티에서 리태그/인용되며 대중의 관심도가 극에 달해 있는지' 등 시장 참여자들의 심리적 과열 상태를 함께 진단하세요.
 
         🔎 [참고 키워드: 실제 시장 영향 분석 및 수치 도출용]
         - 뉴스: 금리, 전쟁, 오일쇼크, 정상회담, 신기술 개발(양자역학, 휴머노이드, UAM 등), IPO, 패권, 인수 합병, 협약, 우주, 나스닥, 다우존스, S&P500, 코스피, 코스닥, 환율 등
@@ -111,19 +128,21 @@ def get_ai_macro_analysis(news_list=None, market_data=None, macro_data=None, sec
         3. 🎯 유망 종목 추천: 글로벌 시총 TOP 50 및 국내 우량주 기준 현재 상황에서 가장 수익성이 기대되는 5종목을 각각 선정하고, 명확한 정량적 데이터(최신 실적, 지표, 수혜 규모)를 근거로 선정 이유를 설명하세요.
         4. 🐋 고래들의 포트폴리오 최신 동향: 국민연금, 버크셔 헤서웨이 등 주요 기관/고래들의 가장 최근 공시(13F 등) 기준 보유 종목 및 비중 지표 동향을 요약하세요.
         5. 📝 전략 요약: 향후 투자 포지션에 대한 3줄 요약 가이드를 제시하세요.
-
         """
 
         response = client.models.generate_content(
             model="models/gemini-2.5-flash",
-            contents=prompt
+            contents=prompt,
+            config={
+                "tools": [{"google_search": {}}]  # 실시간 구글 검색엔진 장착 툴 완벽 가동
+            }
         )
 
         if response and response.text:
             st.session_state.stored_report = response.text
             st.session_state.api_status = "SUCCESS"
+            st.session_state.error_detail = ""
 
-            # 💾 [F5 새로고침 백업용] 성공적으로 불러온 리포트 데이터를 파일에 기록
             try:
                 with open(CACHE_FILE, "w", encoding="utf-8") as f:
                     json.dump({
@@ -151,8 +170,6 @@ def get_ai_macro_analysis(news_list=None, market_data=None, macro_data=None, sec
             st.session_state.api_status = "SERVER_ERROR"
             st.session_state.error_detail = err_msg
 
-
-# 호환성 별칭 연동
 get_global_news_ai = get_ai_macro_analysis
 
 
@@ -165,7 +182,10 @@ def show_report_popup(title, content):
         st.caption(f"🕒 **데이터 분석 기준 시점:** {st.session_state.last_analysis_time}")
 
     st.divider()
-    st.markdown(content)
+    if content and str(content).strip():
+        st.markdown(content)
+    else:
+        st.info("💡 현재 저장된 리포트 텍스트가 비어 있습니다. 사이드바의 '마켓 분석 예약' 버튼을 눌러 실시간 분석 데이터를 새로 받아와 주세요.")
 
     if st.button("닫기"):
         st.rerun()
@@ -2153,11 +2173,12 @@ global_keywords = {
     "미국 금리": "Treasuries",
     "미국": "Donald Trump Election US WAR",
     "지정학적 리스크": "Oil Middle East Tension",
-    "가상자산": "Bitcoin Crypto Regulation",
+    "가상자산": "Bitcoin Crypto Regulation Ethereum Altcoin",
     "중국": "China US relations invasion of Taiwan",
-    "한국": "Korea Debt to GDP",
-    "증시": "Stock Market Equity",
+    "한국": "Korea Debt to GDP Property",
+    "증시": "Stock Market Equity IPO",
     "원유": "Oil shock",
+    "신기술": "Space Drone UAM"
 }
 
 global_cols = st.columns(2)
@@ -2177,6 +2198,11 @@ for i, (kr_name, en_keyword) in enumerate(global_keywords.items()):
                     st.markdown(f"🔗 [기사 원문 읽기]({news['link']})")
         st.markdown("---")
 
+    st.session_state.news_list = news_list
+
+# =========================
+# 위험 차트 분석
+# =========================
 
 def draw_danger_chart(pattern_type):
     # 시스템 필터링 우회를 위해 대괄호를 제거하고 원시 튜플 데이터를 list()로 변환합니다.
