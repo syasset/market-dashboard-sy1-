@@ -132,8 +132,7 @@ def get_ai_macro_analysis(news_list=None, market_data=None, macro_data=None, sec
 
         response = client.models.generate_content(
             model="models/gemini-2.5-flash",
-            contents=prompt,
-            tools=[{"google_search": {}}]  # 👈 config 껍데기 없이 직접 주입합니다.
+            contents=prompt
         )
 
         if response and response.text:
