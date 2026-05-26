@@ -133,7 +133,7 @@ def get_ai_macro_analysis(news_list=None, market_data=None, macro_data=None, sec
         response = client.models.generate_content(
             model="models/gemini-2.5-flash",
             contents=prompt,
-            config=google.genai.types.GenerateContentConfig(  # 👈 풀 경로를 적어주면 파이썬이 무조건 알아듣습니다.
+            config=genai.types.GenerateContentConfig(  # 👈 google 대신 'genai.types'로 시작해야 합니다!
                 tools=[{"google_search": {}}]  # 실시간 구글 검색엔진 장착 툴 완벽 가동
             )
         )
