@@ -133,7 +133,7 @@ def get_ai_macro_analysis(news_list=None, market_data=None, macro_data=None, sec
         response = client.models.generate_content(
             model="models/gemini-2.5-flash",
             contents=prompt,
-            tools=['google_search']  # 👈 구버전에서는 이 한 줄이면 실시간 구글링이 켜집니다!
+            tools=[{"google_search": {}}]
         )
 
         if response and response.text:
