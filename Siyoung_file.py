@@ -133,9 +133,9 @@ def get_ai_macro_analysis(news_list=None, market_data=None, macro_data=None, sec
         response = client.models.generate_content(
             model="models/gemini-2.5-flash",
             contents=prompt,
-            config={
-                "tools": [{"google_search": {}}]  # 실시간 구글 검색엔진 장착 툴 완벽 가동
-            }
+            config=types.GenerateContentConfig(  # 💡 단순 { } 대신 이 클래스로 감싸줍니다.
+                tools=[{"google_search": {}}]
+            )
         )
 
         if response and response.text:
