@@ -133,8 +133,7 @@ def get_ai_macro_analysis(news_list=None, market_data=None, macro_data=None, sec
         response = client.models.generate_content(
             model="models/gemini-2.5-flash",
             contents=prompt,
-            config=genai.types.GenerateContentConfig(  # 💡 단순 { } 대신 이 클래스로 감싸줍니다.
-                tools=[{"google_search": {}}]
+            tools=['google_search']
             )
         )
 
